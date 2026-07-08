@@ -55,3 +55,22 @@ Manage app → Reboot app
 ```
 
 Agar cache versi lama tidak digunakan.
+
+
+## Update v4.4 — Interpretasi Reliabilitas, PCA, dan EFA
+
+Bagian **🧭 Reliabilitas & Faktor** kini tidak hanya menampilkan angka, tetapi juga memberikan makna riset yang ramah untuk pengguna awam:
+
+- Interpretasi Cronbach's Alpha: rendah, cukup, dapat diterima, baik, sangat baik, atau terlalu tinggi/redundan.
+- Deteksi item bermasalah berdasarkan corrected item-total correlation dan alpha if item deleted.
+- Rekomendasi apakah skor total/rata-rata skala sudah layak digunakan.
+- Interpretasi PCA: cumulative variance, eigenvalue > 1, loading utama, variabel lemah, dan cross-loading.
+- Interpretasi EFA: KMO, Bartlett, factor loading, communality, variance explained, item lemah, dan cross-loading.
+- Contoh narasi laporan untuk reliabilitas dan PCA agar hasil lebih mudah dimasukkan ke laporan riset/BAB 4.
+
+Prinsip interpretasi:
+
+- Reliabilitas menunjukkan konsistensi alat ukur, bukan otomatis membuktikan validitas konstruk.
+- PCA berguna untuk reduksi data/komponen utama.
+- EFA berguna untuk eksplorasi struktur faktor/dimensi laten.
+- Keputusan akhir tetap harus dikaitkan dengan teori, konteks riset, dan kualitas item.

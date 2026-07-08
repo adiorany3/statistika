@@ -1520,6 +1520,360 @@ def tukey_table(long_df, alpha):
     return pd.DataFrame(tk.summary().data[1:], columns=tk.summary().data[0])
 
 
+
+# -----------------------------------------------------------------------------
+# Research interpretation helpers: Reliability, PCA, and EFA
+# -----------------------------------------------------------------------------
+def interpret_cronbach_reliability(alpha_value, item_table=None, n_items=None, n_cases=None):
+    """Bangun interpretasi riset untuk Cronbach's Alpha dan item-total statistics."""
+    rows = []
+    try:
+        a = float(alpha_value)
+    except Exception:
+        a = np.nan
+
+    if pd.isna(a):
+        rows.append({
+            "Aspek": "Status reliabilitas",
+            "Makna untuk riset": "Cronbach's Alpha tidak dapat dihitung. Biasanya ini terjadi karena item terlalu sedikit, varians total nol, atau data lengkap terlalu sedikit.",
+            "Saran tindakan": "Pastikan minimal 2 item numerik, item memiliki variasi jawaban, dan missing value tidak terlalu banyak.",
+        })
+        return pd.DataFrame(rows)
+
+    if a >= 0.95:
+        level = "sangat tinggi, tetapi perlu dicek"
+        meaning = "Item sangat konsisten, namun nilai terlalu tinggi dapat menandakan beberapa item terlalu mirip atau repetitif."
+        action = "Pertahankan skala jika sesuai teori, tetapi cek apakah ada item yang redundan agar kuesioner lebih ringkas."
+    elif a >= 0.90:
+        level = "sangat baik"
+        meaning = "Konsistensi internal sangat kuat. Skala umumnya layak dipakai untuk membentuk skor komposit."
+        action = "Gunakan skor total/rata-rata jika item memang satu konstruk; tetap cek item-total correlation."
+    elif a >= 0.80:
+        level = "baik"
+        meaning = "Konsistensi internal baik. Item relatif bergerak searah dalam mengukur konstruk yang sama."
+        action = "Skala dapat digunakan; periksa item dengan korelasi item-total rendah untuk penyempurnaan."
+    elif a >= 0.70:
+        level = "dapat diterima"
+        meaning = "Konsistensi internal cukup memadai untuk banyak riset sosial/pendidikan/manajemen."
+        action = "Skala dapat digunakan dengan catatan; cek item yang melemahkan alpha."
+    elif a >= 0.60:
+        level = "cukup untuk eksplorasi"
+        meaning = "Reliabilitas masih lemah untuk kesimpulan kuat, tetapi kadang dapat diterima pada studi awal/eksploratori."
+        action = "Revisi item, tambah jumlah item yang relevan, cek item negatif yang belum di-reverse coding."
+    else:
+        level = "rendah"
+        meaning = "Item belum konsisten mengukur konstruk yang sama. Skor total berisiko tidak stabil."
+        action = "Jangan langsung memakai skor total; cek salah input, reverse coding, item tidak relevan, atau pisahkan dimensi dengan EFA/PCA."
+
+    rows.append({
+        "Aspek": "Status reliabilitas",
+        "Makna untuk riset": f"Cronbach's Alpha = {_format_number(a)}; reliabilitas tergolong {level}. {meaning}",
+        "Saran tindakan": action,
+    })
+
+    if n_items is not None or n_cases is not None:
+        item_txt = f"{n_items} item" if n_items is not None else "jumlah item tidak diketahui"
+        case_txt = f"{n_cases} kasus lengkap" if n_cases is not None else "jumlah kasus lengkap tidak diketahui"
+        rows.append({
+            "Aspek": "Kecukupan data",
+            "Makna untuk riset": f"Perhitungan didasarkan pada {item_txt} dan {case_txt}.",
+            "Saran tindakan": "Semakin banyak item dan responden yang relevan, semakin stabil estimasi reliabilitas. Untuk kuesioner formal, cek juga validitas isi dan struktur faktor.",
+        })
+
+    if item_table is not None and isinstance(item_table, pd.DataFrame) and not item_table.empty:
+        tbl = item_table.copy()
+        item_col = _first_existing_column(tbl, ["Item", "Variable", "Variabel"])
+        corr_col = _first_existing_column(tbl, ["Corrected Item-Total Corr", "Item-Total", "Corrected Item Total Correlation"])
+        del_col = _first_existing_column(tbl, ["Alpha if Deleted", "Cronbach's Alpha if Item Deleted"])
+
+        if corr_col is not None:
+            tbl["__corr"] = pd.to_numeric(tbl[corr_col], errors="coerce")
+            low = tbl[tbl["__corr"] < 0.30]
+            negative = tbl[tbl["__corr"] < 0]
+            if len(negative):
+                items = ", ".join(negative[item_col].astype(str).head(8)) if item_col else f"{len(negative)} item"
+                rows.append({
+                    "Aspek": "Item bermasalah",
+                    "Makna untuk riset": f"Ada item dengan korelasi item-total negatif: {items}. Ini sering menunjukkan item berlawanan arah, belum di-reverse coding, atau tidak mengukur konstruk yang sama.",
+                    "Saran tindakan": "Periksa redaksi item, lakukan reverse coding untuk item negatif, atau keluarkan item jika tidak sesuai teori.",
+                })
+            elif len(low):
+                items = ", ".join(low[item_col].astype(str).head(8)) if item_col else f"{len(low)} item"
+                rows.append({
+                    "Aspek": "Item perlu ditinjau",
+                    "Makna untuk riset": f"Ada item dengan corrected item-total correlation < 0.30: {items}. Item ini kurang sejalan dengan skor total skala.",
+                    "Saran tindakan": "Tinjau ulang item tersebut. Jika secara teori lemah dan alpha meningkat saat dihapus, pertimbangkan revisi atau penghapusan.",
+                })
+            else:
+                rows.append({
+                    "Aspek": "Konsistensi item",
+                    "Makna untuk riset": "Tidak ada item dengan corrected item-total correlation di bawah 0.30 yang terdeteksi.",
+                    "Saran tindakan": "Item relatif konsisten; keputusan akhir tetap perlu mengikuti teori/konstruk penelitian.",
+                })
+
+        if del_col is not None:
+            tbl["__alpha_deleted"] = pd.to_numeric(tbl[del_col], errors="coerce")
+            improves = tbl[tbl["__alpha_deleted"] > (a + 0.02)]
+            if len(improves):
+                items = ", ".join(improves[item_col].astype(str).head(8)) if item_col else f"{len(improves)} item"
+                rows.append({
+                    "Aspek": "Alpha if item deleted",
+                    "Makna untuk riset": f"Reliabilitas tampak meningkat jika item berikut dihapus: {items}.",
+                    "Saran tindakan": "Jangan hapus otomatis hanya karena angka meningkat. Cocokkan dengan teori, validitas isi, dan arah item sebelum memutuskan.",
+                })
+
+    rows.append({
+        "Aspek": "Makna substantif",
+        "Makna untuk riset": "Reliabilitas menunjukkan konsistensi alat ukur, bukan bukti bahwa konstruk pasti valid. Skala yang reliabel masih perlu didukung validitas teori, isi, dan/atau struktur faktor.",
+        "Saran tindakan": "Jika item berasal dari kuesioner, lanjutkan dengan validitas item, EFA/PCA, atau konfirmasi berdasarkan teori sebelum memakai skor komposit sebagai variabel riset utama.",
+    })
+    return pd.DataFrame(rows)
+
+
+def interpret_pca_results(explained, loadings, selected_cols=None, n_rows=None):
+    """Bangun interpretasi riset untuk PCA: variance, loading, cross-loading, dan rekomendasi."""
+    rows = []
+    if explained is None or loadings is None or not isinstance(explained, pd.DataFrame) or not isinstance(loadings, pd.DataFrame):
+        return pd.DataFrame([{
+            "Aspek": "Status PCA",
+            "Makna untuk riset": "Output PCA belum tersedia atau tidak dapat dibaca.",
+            "Saran tindakan": "Jalankan PCA dengan minimal 2 variabel numerik dan data lengkap yang memadai.",
+        }])
+
+    exp = explained.copy()
+    load = loadings.copy()
+    var_col = _first_existing_column(exp, ["Explained Variance %", "Variance %", "% Variance"])
+    cum_col = _first_existing_column(exp, ["Cumulative %", "Cumulative Variance %"])
+    eig_col = _first_existing_column(exp, ["Eigenvalue", "Eigenvalue/SS Loading"])
+    comp_col = _first_existing_column(exp, ["Component", "Factor"])
+
+    if cum_col is not None:
+        vals = pd.to_numeric(exp[cum_col], errors="coerce").dropna()
+        if len(vals):
+            cum = float(vals.iloc[-1])
+            if cum >= 70:
+                level = "sangat kuat"
+                action = "Komponen yang dipilih sudah merangkum sebagian besar informasi variabel."
+            elif cum >= 60:
+                level = "baik"
+                action = "Cukup baik untuk banyak riset sosial; tetap cek loading tiap variabel."
+            elif cum >= 50:
+                level = "cukup/eksploratori"
+                action = "Masih dapat dipakai untuk eksplorasi, tetapi pertimbangkan menambah komponen atau meninjau variabel."
+            else:
+                level = "rendah"
+                action = "Komponen belum cukup merangkum data; pertimbangkan jumlah komponen lebih banyak, buang variabel lemah, atau gunakan pendekatan lain."
+            rows.append({
+                "Aspek": "Varians yang dijelaskan",
+                "Makna untuk riset": f"Komponen yang dipilih menjelaskan total sekitar {_format_number(cum, 2)}% variasi data; kategori {level}.",
+                "Saran tindakan": action,
+            })
+
+    if eig_col is not None:
+        eig = pd.to_numeric(exp[eig_col], errors="coerce")
+        n_gt1 = int((eig > 1).sum())
+        if n_gt1:
+            rows.append({
+                "Aspek": "Jumlah komponen potensial",
+                "Makna untuk riset": f"Berdasarkan aturan eigenvalue > 1, ada sekitar {n_gt1} komponen yang layak dipertimbangkan.",
+                "Saran tindakan": "Gunakan ini sebagai petunjuk awal saja. Cocokkan dengan scree plot, teori konstruk, dan interpretasi loading.",
+            })
+        else:
+            rows.append({
+                "Aspek": "Jumlah komponen potensial",
+                "Makna untuk riset": "Tidak ada eigenvalue > 1 pada komponen yang ditampilkan, atau nilai eigen tidak cukup kuat.",
+                "Saran tindakan": "Cek kembali jumlah komponen, kualitas variabel, korelasi antar variabel, dan ukuran sampel.",
+            })
+
+    variable_col = _first_existing_column(load, ["Variable", "Variabel", "Item"])
+    comp_cols = [c for c in load.columns if str(c).upper().startswith("PC") or str(c).lower().startswith("component")]
+    if not comp_cols:
+        comp_cols = [c for c in load.columns if c != variable_col and pd.api.types.is_numeric_dtype(pd.to_numeric(load[c], errors="coerce"))]
+
+    if variable_col is not None and comp_cols:
+        assignments = []
+        weak = []
+        cross = []
+        for _, row in load.iterrows():
+            vals = pd.to_numeric(row[comp_cols], errors="coerce").abs().dropna()
+            if vals.empty:
+                continue
+            best_comp = vals.idxmax()
+            best_val = float(vals.max())
+            strong_count = int((vals >= 0.40).sum())
+            var_name = str(row[variable_col])
+            assignments.append((var_name, str(best_comp), best_val))
+            if best_val < 0.40:
+                weak.append(var_name)
+            if strong_count >= 2:
+                cross.append(var_name)
+
+        if assignments:
+            top = sorted(assignments, key=lambda x: x[2], reverse=True)[:8]
+            top_txt = "; ".join([f"{v} → {pc} ({val:.2f})" for v, pc, val in top])
+            rows.append({
+                "Aspek": "Loading utama",
+                "Makna untuk riset": f"Variabel dengan kontribusi/loading terbesar: {top_txt}.",
+                "Saran tindakan": "Namai komponen berdasarkan variabel-variabel dengan loading tertinggi dan sesuai teori. Loading ≥0.40 biasanya mulai layak dibaca; ≥0.60 kuat.",
+            })
+        if weak:
+            rows.append({
+                "Aspek": "Variabel lemah",
+                "Makna untuk riset": "Variabel dengan loading tertinggi < 0.40: " + ", ".join(weak[:10]) + ". Variabel ini kurang terwakili oleh komponen yang dipilih.",
+                "Saran tindakan": "Pertimbangkan revisi, penghapusan, atau tambah komponen bila variabel tersebut penting secara teori.",
+            })
+        if cross:
+            rows.append({
+                "Aspek": "Cross-loading",
+                "Makna untuk riset": "Variabel yang loading ≥0.40 pada lebih dari satu komponen: " + ", ".join(cross[:10]) + ". Ini menunjukkan variabel mungkin mengukur lebih dari satu dimensi.",
+                "Saran tindakan": "Cek redaksi/definisi variabel. Untuk kuesioner, pertimbangkan EFA dengan rotasi atau revisi item.",
+            })
+
+    if selected_cols is not None or n_rows is not None:
+        rows.append({
+            "Aspek": "Konteks data",
+            "Makna untuk riset": f"PCA dijalankan pada {len(selected_cols) if selected_cols is not None else 'beberapa'} variabel dan {n_rows if n_rows is not None else 'sejumlah'} kasus lengkap.",
+            "Saran tindakan": "Untuk hasil yang stabil, jumlah responden sebaiknya memadai dan variabel memiliki korelasi yang bermakna. PCA merangkum variasi data; ia bukan bukti final validitas konstruk.",
+        })
+
+    rows.append({
+        "Aspek": "Kesimpulan praktis",
+        "Makna untuk riset": "PCA membantu mereduksi banyak variabel menjadi beberapa komponen utama sehingga analisis dan interpretasi lebih ringkas.",
+        "Saran tindakan": "Gunakan skor komponen untuk analisis lanjutan bila tujuannya reduksi data. Jika tujuannya menemukan konstruk laten kuesioner, bandingkan dengan EFA dan teori.",
+    })
+    return pd.DataFrame(rows)
+
+
+def interpret_efa_results(kmo_table, loadings, variance=None, communalities=None, eigen_table=None, alpha=None):
+    """Bangun interpretasi riset untuk EFA/PAF agar user awam tahu makna output."""
+    alpha = alpha if alpha is not None else st.session_state.get("active_alpha", 0.05)
+    rows = []
+    try:
+        kmo_df = kmo_table.copy() if isinstance(kmo_table, pd.DataFrame) else pd.DataFrame(kmo_table)
+    except Exception:
+        kmo_df = pd.DataFrame()
+
+    if not kmo_df.empty:
+        kmo_val = _first_numeric_value(kmo_df, ["KMO", "KMO Overall"])
+        bart_p = _first_numeric_value(kmo_df, ["Bartlett p-value", "p-value", "p"])
+        if kmo_val is not None:
+            if kmo_val >= 0.80:
+                desc = "baik/sangat memadai"
+                action = "Analisis faktor relatif layak dilanjutkan."
+            elif kmo_val >= 0.70:
+                desc = "cukup baik"
+                action = "Analisis faktor dapat dilanjutkan, sambil cek communality dan loading."
+            elif kmo_val >= 0.60:
+                desc = "cukup/minimal"
+                action = "Masih bisa dipakai untuk eksplorasi, tetapi interpretasi harus hati-hati."
+            elif kmo_val >= 0.50:
+                desc = "lemah"
+                action = "Pertimbangkan buang item yang lemah, tambah sampel, atau revisi konstruk."
+            else:
+                desc = "tidak memadai"
+                action = "EFA sebaiknya tidak dijadikan dasar kesimpulan kuat; cek korelasi antar item dan jumlah sampel."
+            rows.append({
+                "Aspek": "Kelayakan EFA - KMO",
+                "Makna untuk riset": f"KMO = {_format_number(kmo_val)}; kelayakan sampling {desc}.",
+                "Saran tindakan": action,
+            })
+        if bart_p is not None:
+            if bart_p < alpha:
+                meaning = "Bartlett signifikan; matriks korelasi tidak identik, sehingga ada dasar korelasi untuk analisis faktor."
+                action = "Lanjutkan membaca factor loading, communality, dan variance explained."
+            else:
+                meaning = "Bartlett tidak signifikan; korelasi antar item mungkin belum cukup kuat untuk membentuk faktor."
+                action = "Cek apakah item memang satu domain, tambah sampel, atau pertimbangkan tidak memakai EFA."
+            rows.append({
+                "Aspek": "Kelayakan EFA - Bartlett",
+                "Makna untuk riset": f"p Bartlett = {p_value_text(bart_p)}. {meaning}",
+                "Saran tindakan": action,
+            })
+
+    try:
+        load = loadings.copy() if isinstance(loadings, pd.DataFrame) else pd.DataFrame(loadings)
+    except Exception:
+        load = pd.DataFrame()
+    if not load.empty:
+        variable_col = _first_existing_column(load, ["Variable", "Variabel", "Item"])
+        factor_cols = [c for c in load.columns if str(c).lower().startswith("factor")]
+        if variable_col is not None and factor_cols:
+            weak, cross, assignments = [], [], []
+            for _, row in load.iterrows():
+                vals = pd.to_numeric(row[factor_cols], errors="coerce").abs().dropna()
+                if vals.empty:
+                    continue
+                best_factor = vals.idxmax()
+                best_val = float(vals.max())
+                strong_count = int((vals >= 0.40).sum())
+                item = str(row[variable_col])
+                assignments.append((item, str(best_factor), best_val))
+                if best_val < 0.40:
+                    weak.append(item)
+                if strong_count >= 2:
+                    cross.append(item)
+            if assignments:
+                top_txt = "; ".join([f"{v} → {f} ({val:.2f})" for v, f, val in sorted(assignments, key=lambda x: x[2], reverse=True)[:8]])
+                rows.append({
+                    "Aspek": "Struktur faktor",
+                    "Makna untuk riset": f"Item/variabel paling kuat memuat faktor: {top_txt}.",
+                    "Saran tindakan": "Beri nama faktor berdasarkan kumpulan item dengan loading tertinggi dan dasar teori, bukan hanya angka terbesar."
+                })
+            if weak:
+                rows.append({
+                    "Aspek": "Item lemah",
+                    "Makna untuk riset": "Item dengan loading tertinggi < 0.40: " + ", ".join(weak[:10]) + ". Item ini belum jelas masuk ke faktor mana.",
+                    "Saran tindakan": "Pertimbangkan revisi atau penghapusan item jika tidak penting secara teori."
+                })
+            if cross:
+                rows.append({
+                    "Aspek": "Cross-loading",
+                    "Makna untuk riset": "Item yang memuat lebih dari satu faktor: " + ", ".join(cross[:10]) + ". Item ini dapat menimbulkan ambiguitas konstruk.",
+                    "Saran tindakan": "Cek redaksi item; pertimbangkan rotasi lain atau keputusan teoritis."
+                })
+
+    try:
+        comm = communalities.copy() if isinstance(communalities, pd.DataFrame) else pd.DataFrame(communalities)
+    except Exception:
+        comm = pd.DataFrame()
+    if not comm.empty:
+        comm_col = _first_existing_column(comm, ["Communality", "Extraction", "h2"])
+        item_col = _first_existing_column(comm, ["Variable", "Variabel", "Item"])
+        if comm_col is not None:
+            comm["__h2"] = pd.to_numeric(comm[comm_col], errors="coerce")
+            low = comm[comm["__h2"] < 0.30]
+            if len(low):
+                items = ", ".join(low[item_col].astype(str).head(10)) if item_col else f"{len(low)} item"
+                rows.append({
+                    "Aspek": "Communality rendah",
+                    "Makna untuk riset": f"Ada item dengan communality < 0.30: {items}. Faktor belum menjelaskan item tersebut dengan baik.",
+                    "Saran tindakan": "Tinjau item ini. Jika tidak penting secara teori, pertimbangkan dikeluarkan dan jalankan ulang EFA."
+                })
+
+    try:
+        var_df = variance.copy() if isinstance(variance, pd.DataFrame) else pd.DataFrame(variance)
+    except Exception:
+        var_df = pd.DataFrame()
+    if not var_df.empty:
+        cum_col = _first_existing_column(var_df, ["Cumulative %", "Cumulative Variance %"])
+        if cum_col is not None:
+            vals = pd.to_numeric(var_df[cum_col], errors="coerce").dropna()
+            if len(vals):
+                cum = float(vals.iloc[-1])
+                rows.append({
+                    "Aspek": "Varians faktor",
+                    "Makna untuk riset": f"Faktor yang dipilih menjelaskan sekitar {_format_number(cum, 2)}% variasi bersama item.",
+                    "Saran tindakan": "Jika persentase rendah, cek item lemah, jumlah faktor, atau kesesuaian konstruk dengan teori."
+                })
+
+    if not rows:
+        rows.append({
+            "Aspek": "Status EFA",
+            "Makna untuk riset": "Output EFA belum cukup untuk ditafsirkan otomatis.",
+            "Saran tindakan": "Pastikan KMO/Bartlett, loading, communalities, dan variance table tersedia."
+        })
+    return pd.DataFrame(rows)
+
 def cronbach_alpha(df_items):
     data = df_items.apply(pd.to_numeric, errors="coerce").dropna()
     k = data.shape[1]
@@ -4083,16 +4437,28 @@ elif active_section == '📈 Regresi':
 
 elif active_section == '🧭 Reliabilitas & Faktor':
     try:
-        st.subheader("🧭 Reliabilitas & PCA")
+        st.subheader("🧭 Reliabilitas, PCA & EFA dengan Interpretasi Riset")
         st.markdown("### Cronbach's Alpha")
         item_cols = st.multiselect("Pilih item skala", num_cols, default=[c for c in num_cols if c.lower().startswith("item")][:6])
         if st.button("Hitung Cronbach's Alpha", type="primary"):
             if len(item_cols) < 2:
                 st.error("Pilih minimal 2 item.")
             else:
+                complete_cases = len(df[item_cols].apply(pd.to_numeric, errors="coerce").dropna())
                 alpha_value, item_table = cronbach_alpha(df[item_cols])
-                show_table("Reliability Statistics", pd.DataFrame([{"Cronbach's Alpha": alpha_value, "N Items": len(item_cols), "Complete Cases": len(df[item_cols].dropna())}]).round(5))
+                reliability_summary = pd.DataFrame([{"Cronbach's Alpha": alpha_value, "N Items": len(item_cols), "Complete Cases": complete_cases}]).round(5)
+                show_table("Reliability Statistics", reliability_summary)
                 show_table("Item-Total Statistics", item_table)
+                reliability_interpretation = interpret_cronbach_reliability(alpha_value, item_table, n_items=len(item_cols), n_cases=complete_cases)
+                show_table("Makna Riset - Reliabilitas", reliability_interpretation, note="Interpretasi ini membantu membaca kualitas instrumen, item yang perlu ditinjau, dan langkah tindak lanjut sebelum skor total dipakai.")
+
+                with st.expander("📝 Contoh narasi laporan reliabilitas"):
+                    level_text = reliability_interpretation.iloc[0]["Makna untuk riset"] if not reliability_interpretation.empty else "Reliabilitas belum dapat dimaknai."
+                    st.markdown(f"""
+Berdasarkan hasil uji reliabilitas, diperoleh nilai Cronbach's Alpha sebesar **{_format_number(alpha_value)}** dengan jumlah item **{len(item_cols)}**. {level_text}
+
+Dengan demikian, keputusan penggunaan skor total/rata-rata skala perlu mempertimbangkan nilai alpha, korelasi item-total, serta kesesuaian item dengan konstruk teoritis penelitian.
+""")
 
         st.markdown("### Principal Component Analysis (PCA)")
         pca_cols = st.multiselect("Variabel PCA", num_cols, default=num_cols[: min(5, len(num_cols))], key="pca_cols")
@@ -4133,6 +4499,25 @@ elif active_section == '🧭 Reliabilitas & Faktor':
                     loadings = pd.DataFrame(pca.components_.T, index=pca_cols, columns=[f"PC{i+1}" for i in range(n_comp_safe)]).reset_index(names="Variable").round(5)
                     show_table("PCA Explained Variance", explained)
                     show_table("PCA Component Loadings", loadings)
+                    pca_interpretation = interpret_pca_results(explained, loadings, selected_cols=pca_cols, n_rows=len(data))
+                    show_table("Makna Riset - PCA", pca_interpretation, note="Interpretasi ini membantu menentukan apakah komponen sudah cukup menjelaskan data, variabel mana yang dominan, dan apa langkah berikutnya.")
+
+                    with st.expander("📝 Contoh narasi laporan PCA"):
+                        cum_val = None
+                        cum_col = _first_existing_column(explained, ["Cumulative %", "Cumulative Variance %"])
+                        if cum_col is not None:
+                            vals = pd.to_numeric(explained[cum_col], errors="coerce").dropna()
+                            if len(vals):
+                                cum_val = float(vals.iloc[-1])
+                        eig_col = _first_existing_column(explained, ["Eigenvalue"])
+                        eig_count = None
+                        if eig_col is not None:
+                            eig_count = int((pd.to_numeric(explained[eig_col], errors="coerce") > 1).sum())
+                        st.markdown(f"""
+Analisis PCA dilakukan terhadap **{len(pca_cols)} variabel** dengan **{len(data)} kasus lengkap**. Komponen yang diekstraksi menjelaskan sekitar **{_format_number(cum_val, 2) if cum_val is not None else 'NA'}%** variasi data. Berdasarkan aturan eigenvalue > 1, terdapat sekitar **{eig_count if eig_count is not None else 'NA'}** komponen yang dapat dipertimbangkan.
+
+Komponen dapat diberi nama berdasarkan variabel dengan loading tertinggi. Hasil PCA sebaiknya digunakan sebagai reduksi data/indikator ringkas, dan tetap dikaitkan dengan teori penelitian.
+""")
 
         st.markdown("### Exploratory Factor Analysis (EFA)")
         efa_cols = st.multiselect("Variabel EFA", num_cols, default=[c for c in num_cols if c.lower().startswith("item")][:6], key="efa_cols")
@@ -4167,6 +4552,8 @@ elif active_section == '🧭 Reliabilitas & Faktor':
                         show_table("EFA Variance Explained", variance)
                         show_table("EFA Communalities", communalities)
                         show_table("EFA Eigenvalues", eigen_table)
+                        efa_interpretation = interpret_efa_results(kmo_table, loadings, variance, communalities, eigen_table)
+                        show_table("Makna Riset - EFA", efa_interpretation, note="Interpretasi ini membantu membaca kelayakan faktor, item lemah, cross-loading, dan makna dimensi yang terbentuk.")
                         if "fallback" in efa_note.lower():
                             st.info(efa_note)
                         else:
