@@ -470,34 +470,69 @@ def varimax_rotation(loadings, gamma=1.0, q=50, tol=1e-6):
 
 
 def efa_fallback_from_correlation(data: pd.DataFrame, columns, n_factors: int, rotation):
-    """Fallback EFA tanpa factor-analyzer: extraction dari eigen correlation matrix.
+    """EFA fallback stabil tanpa factor-analyzer.
 
-    Ini bukan pengganti penuh maximum-likelihood/minres EFA, tetapi menjaga aplikasi tetap
-    memberi output factor loading yang dapat dipakai untuk eksplorasi saat dependency eksternal
-    konflik dengan scikit-learn terbaru.
+    Engine ini memakai Principal Axis Factoring (PAF) berbasis correlation matrix:
+    1) standardisasi data,
+    2) estimasi communality awal memakai squared multiple correlation,
+    3) iterasi reduced correlation matrix,
+    4) rotasi varimax opsional.
+
+    Tujuannya agar fitur EFA tetap usable di komputer yang mengalami konflik
+    factor-analyzer/scikit-learn, tanpa hanya jatuh ke PCA biasa.
     """
     if StandardScaler is None:
-        raise RuntimeError("scikit-learn belum tersedia untuk fallback EFA.")
+        raise RuntimeError("scikit-learn belum tersedia untuk EFA fallback.")
+
     x = data[columns].apply(pd.to_numeric, errors="coerce").dropna()
     if x.shape[0] < 5:
         raise RuntimeError("EFA sebaiknya memiliki minimal 5 baris lengkap; idealnya jauh lebih besar.")
-    max_components = min(n_factors, x.shape[1] - 1, x.shape[0] - 1)
+    if x.shape[1] < 2:
+        raise RuntimeError("EFA membutuhkan minimal 2 variabel numerik.")
+
+    max_components = min(int(n_factors), x.shape[1] - 1, x.shape[0] - 1)
     if max_components < 1:
         raise RuntimeError("Jumlah faktor tidak valid untuk data yang dipilih.")
+
     z = StandardScaler().fit_transform(x)
     corr = np.corrcoef(z, rowvar=False)
     corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
     np.fill_diagonal(corr, 1.0)
-    eigenvalues, eigenvectors = np.linalg.eigh(corr)
-    order = np.argsort(eigenvalues)[::-1]
-    eigenvalues = np.maximum(eigenvalues[order], 0)
-    eigenvectors = eigenvectors[:, order]
-    loadings_arr = eigenvectors[:, :max_components] * np.sqrt(eigenvalues[:max_components])
+
+    # Communality awal: squared multiple correlations (SMC).
+    inv_corr = np.linalg.pinv(corr)
+    smc = 1 - (1 / np.maximum(np.diag(inv_corr), np.finfo(float).eps))
+    communalities = np.clip(np.nan_to_num(smc, nan=0.5, posinf=0.9, neginf=0.2), 0.05, 0.99)
+
+    eigenvalues = None
+    loadings_arr = None
+    converged = False
+    for iteration in range(1, 101):
+        reduced_corr = corr.copy()
+        np.fill_diagonal(reduced_corr, communalities)
+        vals, vecs = np.linalg.eigh(reduced_corr)
+        order = np.argsort(vals)[::-1]
+        vals = vals[order]
+        vecs = vecs[:, order]
+        vals_pos = np.maximum(vals[:max_components], 0)
+        candidate_loadings = vecs[:, :max_components] * np.sqrt(vals_pos)
+        new_communalities = np.clip(np.sum(candidate_loadings ** 2, axis=1), 0.0, 0.999)
+        if np.max(np.abs(new_communalities - communalities)) < 1e-5:
+            loadings_arr = candidate_loadings
+            eigenvalues = vals
+            communalities = new_communalities
+            converged = True
+            break
+        loadings_arr = candidate_loadings
+        eigenvalues = vals
+        communalities = new_communalities
+
+    rotation_requested = "none" if rotation is None else str(rotation).lower()
     rotation_used = "none"
-    if rotation in ["varimax", "promax", "oblimin"] and max_components > 1:
+    if rotation_requested in ["varimax", "promax", "oblimin"] and max_components > 1:
         loadings_arr = varimax_rotation(loadings_arr)
         rotation_used = "varimax"
-    elif rotation is None:
+    elif rotation_requested not in ["none", "null"]:
         rotation_used = "none"
 
     factor_names = [f"Factor {i+1}" for i in range(max_components)]
@@ -509,15 +544,22 @@ def efa_fallback_from_correlation(data: pd.DataFrame, columns, n_factors: int, r
         index=["SS Loadings", "Proportion Var", "Cumulative Var"],
         columns=factor_names,
     ).reset_index(names="Metric").round(5)
-    communalities = pd.DataFrame(
+    communalities_table = pd.DataFrame(
         {"Variable": columns, "Communality": np.sum(loadings_arr ** 2, axis=1)}
     ).round(5)
-    note = (
-        "Fallback EFA digunakan karena factor-analyzer tidak tersedia/berkonflik. "
-        f"Extraction berbasis eigen correlation matrix; rotasi yang dipakai: {rotation_used}."
-    )
-    return loadings, variance, communalities, note
 
+    eigen_table = pd.DataFrame({
+        "Component": [f"Component {i+1}" for i in range(len(eigenvalues))],
+        "Eigenvalue": eigenvalues,
+    }).round(5)
+
+    note = (
+        "EFA berhasil dihitung menggunakan engine fallback stabil. "
+        "Extraction: Principal Axis Factoring berbasis correlation matrix. "
+        f"Rotasi diminta: {rotation_requested}; rotasi dipakai: {rotation_used}. "
+        f"Konvergen: {'ya' if converged else 'tidak penuh, hasil iterasi terakhir dipakai'}."
+    )
+    return loadings, variance, communalities_table, eigen_table, note
 
 def run_efa_analysis(data: pd.DataFrame, columns, n_factors: int, rotation, prefer_fallback=False):
     """Jalankan EFA robust: factor-analyzer jika bisa, fallback jika gagal."""
@@ -543,7 +585,8 @@ def run_efa_analysis(data: pd.DataFrame, columns, n_factors: int, rotation, pref
                 columns=factor_names,
             ).reset_index(names="Metric").round(5)
             communalities = pd.DataFrame({"Variable": columns, "Communality": fa.get_communalities()}).round(5)
-            return kmo_table, loadings, variance, communalities, "EFA dihitung dengan factor-analyzer."
+            eigen_table = pd.DataFrame({"Component": [f"Factor {i+1}" for i in range(n_factors)], "Eigenvalue/SS Loading": fa.get_factor_variance()[0]}).round(5)
+            return kmo_table, loadings, variance, communalities, eigen_table, "EFA dihitung dengan factor-analyzer."
         except TypeError as exc:
             msg = str(exc)
             if "force_all_finite" not in msg and "ensure_all_finite" not in msg:
@@ -552,8 +595,8 @@ def run_efa_analysis(data: pd.DataFrame, columns, n_factors: int, rotation, pref
             # Jika penyebabnya dependency, fallback; selain itu fallback juga aman untuk menjaga UI tidak crash.
             fallback_reason = str(exc)
 
-    loadings, variance, communalities, note = efa_fallback_from_correlation(x, columns, n_factors, rotation)
-    return kmo_table, loadings, variance, communalities, note
+    loadings, variance, communalities, eigen_table, note = efa_fallback_from_correlation(x, columns, n_factors, rotation)
+    return kmo_table, loadings, variance, communalities, eigen_table, note
 
 def report_as_markdown(report_items):
     lines = [f"# Output Statistik Pro+", "", f"Dibuat: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
@@ -1704,9 +1747,9 @@ with tab_reliability:
     rotation = st.selectbox("Rotasi", ["varimax", "promax", "oblimin", None], index=0)
     efa_engine = st.selectbox(
         "Engine EFA",
-        ["Otomatis: factor-analyzer lalu fallback", "Fallback stabil tanpa factor-analyzer"],
+        ["Fallback stabil (Principal Axis Factoring)", "Otomatis: factor-analyzer lalu fallback"],
         index=0,
-        help="Pilih fallback stabil jika factor-analyzer masih bentrok dengan versi scikit-learn di komputer Anda.",
+        help="Fallback stabil direkomendasikan agar EFA tetap jalan tanpa konflik factor-analyzer/scikit-learn.",
     )
     if st.button("Jalankan EFA"):
         if len(efa_cols) < 2:
@@ -1718,20 +1761,21 @@ with tab_reliability:
             else:
                 try:
                     prefer_fallback = efa_engine.startswith("Fallback")
-                    kmo_table, loadings, variance, communalities, efa_note = run_efa_analysis(
+                    kmo_table, loadings, variance, communalities, eigen_table, efa_note = run_efa_analysis(
                         df, efa_cols, n_factors, rotation, prefer_fallback=prefer_fallback
                     )
                     show_table("KMO & Bartlett's Test", kmo_table)
                     show_table("EFA Factor Loadings", loadings)
                     show_table("EFA Variance Explained", variance)
                     show_table("EFA Communalities", communalities)
-                    if "Fallback" in efa_note:
-                        st.warning(efa_note)
+                    show_table("EFA Eigenvalues", eigen_table)
+                    if "fallback" in efa_note.lower():
+                        st.info(efa_note)
                     else:
                         st.success(efa_note)
                 except Exception as exc:
                     st.error(f"EFA gagal dihitung: {exc}")
-                    st.info("Coba pilih Engine EFA: `Fallback stabil tanpa factor-analyzer`, lalu jalankan ulang.")
+                    st.info("Coba pilih Engine EFA: `Fallback stabil (Principal Axis Factoring)`, lalu jalankan ulang.")
 
 with tab_visual:
     st.subheader("🎨 Visualisasi")
