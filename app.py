@@ -385,6 +385,362 @@ def auto_interpretation(title, table, alpha=None):
     return ""
 
 
+def _first_existing_column(df_table, candidates):
+    lower_cols = {str(c).lower().strip(): c for c in df_table.columns}
+    for cand in candidates:
+        key = str(cand).lower().strip()
+        if key in lower_cols:
+            return lower_cols[key]
+    # fallback contains match, useful for CI/eigen labels
+    for cand in candidates:
+        needle = str(cand).lower().strip()
+        for lower, original in lower_cols.items():
+            if needle in lower:
+                return original
+    return None
+
+
+def _first_numeric_value(df_table, candidates):
+    col = _first_existing_column(df_table, candidates)
+    if col is None:
+        return None
+    values = pd.to_numeric(df_table[col], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.iloc[0])
+
+
+def _format_number(value, digits=3):
+    try:
+        if value is None or pd.isna(value):
+            return "NA"
+        value = float(value)
+        if abs(value) < 0.001 and value != 0:
+            return f"{value:.2e}"
+        return f"{value:.{digits}f}"
+    except Exception:
+        return str(value)
+
+
+def _effect_size_label(value, kind="generic"):
+    try:
+        v = abs(float(value))
+    except Exception:
+        return "tidak dapat dikategorikan"
+    kind = str(kind).lower()
+    if kind in ["d", "cohen", "cohen's d", "dz"]:
+        if v < 0.20:
+            return "sangat kecil"
+        if v < 0.50:
+            return "kecil"
+        if v < 0.80:
+            return "sedang"
+        return "besar"
+    if kind in ["eta", "eta2", "η²", "omega", "ω²"]:
+        if v < 0.01:
+            return "sangat kecil"
+        if v < 0.06:
+            return "kecil"
+        if v < 0.14:
+            return "sedang"
+        return "besar"
+    if kind in ["r", "corr", "correlation"]:
+        if v < 0.10:
+            return "sangat lemah"
+        if v < 0.30:
+            return "lemah"
+        if v < 0.50:
+            return "sedang"
+        if v < 0.70:
+            return "kuat"
+        return "sangat kuat"
+    if kind in ["r2", "r²", "pseudo r²"]:
+        return f"menjelaskan sekitar {v*100:.1f}% variasi"
+    return "perlu dibaca bersama konteks riset"
+
+
+def _p_strength(p, alpha):
+    try:
+        p = float(p)
+    except Exception:
+        return "Bukti statistik tidak dapat dinilai karena p-value tidak tersedia."
+    if p < 0.001:
+        return "Bukti statistik sangat kuat terhadap H₀."
+    if p < alpha:
+        return "Bukti statistik cukup untuk menolak H₀ pada taraf signifikansi yang dipilih."
+    if p < 0.10 and alpha <= 0.05:
+        return "Ada kecenderungan/pola, tetapi belum cukup kuat pada α = 0.05."
+    return "Belum ada bukti statistik yang cukup untuk menolak H₀."
+
+
+def _table_as_long_text(df_table, max_rows=3):
+    try:
+        small = df_table.head(max_rows).copy().fillna("")
+        return "; ".join([", ".join([f"{c}={row[c]}" for c in small.columns[:5]]) for _, row in small.iterrows()])
+    except Exception:
+        return ""
+
+
+def insight_for_output_item(item, alpha=None):
+    """Ubah satu output statistik menjadi insight riset yang lebih bermakna."""
+    alpha = alpha if alpha is not None else st.session_state.get("active_alpha", 0.05)
+    title = str(item.get("title", "Output"))
+    title_low = title.lower()
+    note = str(item.get("note", "") or "")
+    table = item.get("table")
+    if table is None:
+        if note:
+            return [{"Aspek": "Catatan", "Insight": note}]
+        return [{"Aspek": "Catatan", "Insight": "Output ini tidak memiliki tabel yang dapat diringkas."}]
+    try:
+        df_table = table.copy() if isinstance(table, pd.DataFrame) else pd.DataFrame(table)
+    except Exception:
+        return [{"Aspek": "Catatan", "Insight": "Tabel output tidak dapat dibaca untuk insight otomatis."}]
+
+    insights = []
+    p = _first_numeric_value(df_table, ["p-value", "p", "Prob(F)", "LLR p-value", "Bartlett p-value"])
+
+    if p is not None:
+        if "normal" in title_low or "jarque" in title_low:
+            meaning = "Data/residual relatif memenuhi asumsi normalitas." if p >= alpha else "Ada indikasi penyimpangan dari normalitas; pertimbangkan transformasi, uji robust, atau uji nonparametrik."
+        elif "levene" in title_low:
+            meaning = "Asumsi homogenitas varians relatif terpenuhi." if p >= alpha else "Varians antar kelompok tidak homogen; gunakan Welch/opsi equal_var=False atau uji robust."
+        elif "bartlett" in title_low or "kmo" in title_low:
+            meaning = "Matriks korelasi layak dianalisis faktor bila KMO memadai dan Bartlett signifikan." if p < alpha else "Bartlett tidak signifikan; struktur korelasi mungkin belum cukup kuat untuk analisis faktor."
+        elif "chi-square" in title_low or "crosstab" in title_low:
+            meaning = "Ada hubungan/asosiasi antar variabel kategorik." if p < alpha else "Belum ada bukti hubungan yang cukup kuat antar variabel kategorik."
+        elif "correlation" in title_low or "korelasi" in title_low:
+            meaning = "Ada hubungan linear/monoton yang signifikan pada pasangan variabel terkait." if p < alpha else "Hubungan antar variabel belum signifikan pada taraf α yang dipilih."
+        elif "regresi" in title_low or "regression" in title_low or "coefficients" in title_low:
+            meaning = "Setidaknya satu parameter/prediktor menunjukkan kontribusi signifikan terhadap model." if p < alpha else "Kontribusi parameter/prediktor belum cukup kuat secara statistik."
+        elif "anova" in title_low:
+            meaning = "Terdapat perbedaan rerata antar kelompok/faktor; lanjutkan post-hoc atau simple effects untuk mengetahui sumber perbedaan." if p < alpha else "Belum ada bukti perbedaan rerata yang cukup kuat antar kelompok/faktor."
+        elif "t-test" in title_low or "mann-whitney" in title_low or "wilcoxon" in title_low or "kruskal" in title_low or "friedman" in title_low:
+            meaning = "Perbedaan yang diuji bermakna secara statistik." if p < alpha else "Perbedaan yang diuji belum bermakna secara statistik."
+        else:
+            meaning = "Hasil signifikan secara statistik." if p < alpha else "Hasil belum signifikan secara statistik."
+        insights.append({"Aspek": "Makna statistik", "Insight": f"p = {p_value_text(p)} pada α = {alpha:.2f}. {meaning} {_p_strength(p, alpha)}"})
+
+    # Effect sizes and model fit
+    for col, kind, label in [
+        ("Cohen's d", "d", "Cohen's d"),
+        ("Cohen's dz", "d", "Cohen's dz"),
+        ("η²", "eta", "η²"),
+        ("ω²", "eta", "ω²"),
+        ("R²", "r2", "R²"),
+        ("Adjusted R²", "r2", "Adjusted R²"),
+        ("Pseudo R²", "r2", "Pseudo R²"),
+    ]:
+        val = _first_numeric_value(df_table, [col])
+        if val is not None:
+            if kind == "r2":
+                insights.append({"Aspek": "Kekuatan model", "Insight": f"{label} = {_format_number(val)}; model {_effect_size_label(val, kind)}. Nilai ini membantu menilai manfaat praktis model, bukan hanya signifikansinya."})
+            else:
+                insights.append({"Aspek": "Effect size", "Insight": f"{label} = {_format_number(val)}; besarnya efek tergolong {_effect_size_label(val, kind)}. Ini menunjukkan seberapa berarti temuan secara praktis/substantif."})
+            break
+
+    # Reliability
+    alpha_val = _first_numeric_value(df_table, ["Cronbach's Alpha"])
+    if alpha_val is not None:
+        if alpha_val >= 0.90:
+            level = "sangat tinggi; cek kemungkinan item terlalu repetitif"
+        elif alpha_val >= 0.80:
+            level = "baik"
+        elif alpha_val >= 0.70:
+            level = "dapat diterima untuk riset umum"
+        elif alpha_val >= 0.60:
+            level = "cukup untuk eksplorasi, tetapi perlu hati-hati"
+        else:
+            level = "rendah; skala perlu direvisi atau item perlu diperiksa"
+        insights.append({"Aspek": "Makna instrumen", "Insight": f"Cronbach's α = {_format_number(alpha_val)} ({level}). Artinya konsistensi internal skala perlu dimaknai sebelum skor total dipakai dalam analisis lanjut."})
+
+    # KMO/Bartlett
+    kmo_val = _first_numeric_value(df_table, ["KMO"])
+    if kmo_val is not None:
+        if kmo_val >= 0.90:
+            kmo_desc = "sangat baik"
+        elif kmo_val >= 0.80:
+            kmo_desc = "baik"
+        elif kmo_val >= 0.70:
+            kmo_desc = "cukup baik"
+        elif kmo_val >= 0.60:
+            kmo_desc = "cukup/minimal"
+        elif kmo_val >= 0.50:
+            kmo_desc = "lemah tetapi masih mungkin untuk eksplorasi"
+        else:
+            kmo_desc = "tidak memadai"
+        insights.append({"Aspek": "Kelayakan faktor", "Insight": f"KMO = {_format_number(kmo_val)} ({kmo_desc}). EFA lebih layak bila KMO ≥ 0.60 dan Bartlett signifikan."})
+
+    # Correlation matrix: strongest pair
+    if ("korelasi" in title_low or "correlation" in title_low) and df_table.shape[0] >= 2:
+        try:
+            corr_df = df_table.copy()
+            if corr_df.columns[0].lower() in ["index", "variabel", "variable"]:
+                corr_df = corr_df.set_index(corr_df.columns[0])
+            corr_num = corr_df.apply(pd.to_numeric, errors="coerce")
+            pairs = []
+            cols = corr_num.columns.tolist()
+            for i, c1 in enumerate(cols):
+                for j, c2 in enumerate(cols):
+                    if j <= i:
+                        continue
+                    val = corr_num.loc[c1, c2] if c1 in corr_num.index else corr_num.iloc[i, j]
+                    if pd.notna(val):
+                        pairs.append((abs(float(val)), float(val), str(c1), str(c2)))
+            if pairs:
+                _, val, c1, c2 = sorted(pairs, reverse=True)[0]
+                direction = "positif" if val > 0 else "negatif"
+                insights.append({"Aspek": "Pola hubungan terkuat", "Insight": f"Pasangan terkuat adalah {c1} dan {c2} dengan r = {_format_number(val)} ({direction}, {_effect_size_label(val, 'r')}). Ini dapat menjadi kandidat hubungan utama untuk dibahas dalam riset."})
+        except Exception:
+            pass
+
+    # Regression coefficients: significant predictors and direction
+    if "coefficients" in title_low or "koefisien" in title_low:
+        p_col = _first_existing_column(df_table, ["p-value", "P>|t|", "P>|z|", "p"])
+        term_col = _first_existing_column(df_table, ["Variabel", "Variable", "Term", "index"])
+        coef_col = _first_existing_column(df_table, ["Coef.", "Coefficient", "Koefisien", "coef"])
+        if p_col is not None and term_col is not None:
+            temp = df_table.copy()
+            temp["__p"] = pd.to_numeric(temp[p_col], errors="coerce")
+            sig = temp[(temp["__p"] < alpha) & (~temp[term_col].astype(str).str.lower().isin(["const", "intercept"]))]
+            if not sig.empty:
+                parts = []
+                for _, row in sig.head(5).iterrows():
+                    direction = ""
+                    if coef_col is not None:
+                        coef = pd.to_numeric(pd.Series([row[coef_col]]), errors="coerce").iloc[0]
+                        if pd.notna(coef):
+                            direction = "positif" if coef > 0 else "negatif"
+                    parts.append(f"{row[term_col]}{f' ({direction})' if direction else ''}")
+                insights.append({"Aspek": "Prediktor penting", "Insight": "Prediktor yang tampak berkontribusi signifikan: " + ", ".join(parts) + ". Fokuskan pembahasan pada arah dan makna teoritis prediktor tersebut."})
+            else:
+                insights.append({"Aspek": "Prediktor penting", "Insight": "Tidak ada prediktor non-konstanta yang signifikan pada α yang dipilih. Evaluasi ukuran sampel, kualitas pengukuran, multikolinearitas, atau teori model."})
+
+    # EFA loadings
+    if "factor loadings" in title_low or "efa" in title_low and "loadings" in title_low:
+        try:
+            var_col = _first_existing_column(df_table, ["Variable", "Variabel"])
+            factor_cols = [c for c in df_table.columns if str(c).lower().startswith("factor")]
+            if var_col is not None and factor_cols:
+                assignments = []
+                cross = []
+                for _, row in df_table.iterrows():
+                    values = pd.to_numeric(row[factor_cols], errors="coerce").abs()
+                    if values.dropna().empty:
+                        continue
+                    best_factor = values.idxmax()
+                    best_val = values.max()
+                    if best_val >= 0.40:
+                        assignments.append(f"{row[var_col]} → {best_factor} ({best_val:.2f})")
+                    if (values >= 0.40).sum() > 1:
+                        cross.append(str(row[var_col]))
+                if assignments:
+                    insights.append({"Aspek": "Struktur faktor", "Insight": "Item/variabel dengan loading kuat: " + "; ".join(assignments[:8]) + ". Gunakan pola ini untuk menamai faktor berdasarkan kesamaan konsep."})
+                if cross:
+                    insights.append({"Aspek": "Catatan struktur", "Insight": "Ada indikasi cross-loading pada: " + ", ".join(cross[:8]) + ". Item ini perlu ditinjau apakah ambigu secara konseptual."})
+        except Exception:
+            pass
+
+    # Communalities
+    if "communalities" in title_low:
+        comm_col = _first_existing_column(df_table, ["Communality", "Komunalitas"])
+        var_col = _first_existing_column(df_table, ["Variable", "Variabel"])
+        if comm_col is not None and var_col is not None:
+            temp = df_table.copy()
+            temp["__comm"] = pd.to_numeric(temp[comm_col], errors="coerce")
+            low = temp[temp["__comm"] < 0.30]
+            if low.empty:
+                insights.append({"Aspek": "Kualitas item", "Insight": "Communality mayoritas memadai. Variabel relatif terwakili oleh faktor yang diekstraksi."})
+            else:
+                insights.append({"Aspek": "Kualitas item", "Insight": "Variabel dengan communality rendah (<0.30): " + ", ".join(low[var_col].astype(str).head(8)) + ". Pertimbangkan revisi/penghapusan item setelah melihat teori."})
+
+    # Descriptive overview
+    if "deskriptif" in title_low or "descriptive" in title_low:
+        mean_col = _first_existing_column(df_table, ["Mean"])
+        sd_col = _first_existing_column(df_table, ["Std. Dev", "SD"])
+        var_col = _first_existing_column(df_table, ["Variabel", "Variable"])
+        miss_col = _first_existing_column(df_table, ["Missing", "Missing %"])
+        if mean_col is not None and var_col is not None:
+            insights.append({"Aspek": "Gambaran data", "Insight": "Statistik deskriptif menunjukkan posisi tengah dan sebaran tiap variabel. Variabel dengan rerata tinggi/rendah atau standar deviasi besar layak menjadi fokus awal pembahasan."})
+        if miss_col is not None:
+            try:
+                miss = pd.to_numeric(df_table[miss_col], errors="coerce").fillna(0)
+                if (miss > 0).any():
+                    worst_idx = miss.idxmax()
+                    insights.append({"Aspek": "Kualitas data", "Insight": f"Terdapat missing value, paling menonjol pada {df_table.loc[worst_idx, var_col] if var_col else 'salah satu variabel'}. Jelaskan strategi penanganan missing sebelum inferensi."})
+            except Exception:
+                pass
+
+    if note and not any(note in x["Insight"] for x in insights):
+        insights.append({"Aspek": "Catatan output", "Insight": note})
+    if not insights:
+        insights.append({"Aspek": "Ringkasan", "Insight": f"Output {title} perlu dibaca bersama desain penelitian, skala pengukuran, ukuran sampel, dan teori. Cuplikan tabel: {_table_as_long_text(df_table)}"})
+    insights.append({"Aspek": "Saran pelaporan", "Insight": "Dalam laporan, jangan hanya menulis p-value. Sertakan arah temuan, ukuran efek/model fit, asumsi yang diuji, dan makna substantif terhadap pertanyaan penelitian."})
+    return insights
+
+
+def build_insight_table(report_items, alpha=None, selected_titles=None):
+    rows = []
+    alpha = alpha if alpha is not None else st.session_state.get("active_alpha", 0.05)
+    for item in report_items:
+        if selected_titles and item.get("title") not in selected_titles:
+            continue
+        item_insights = insight_for_output_item(item, alpha=alpha)
+        for insight in item_insights:
+            rows.append({"Output": item.get("title", "Output"), "Aspek": insight.get("Aspek", "Insight"), "Insight Riset": insight.get("Insight", "")})
+    return pd.DataFrame(rows)
+
+
+def build_research_synthesis(report_items, alpha=None):
+    alpha = alpha if alpha is not None else st.session_state.get("active_alpha", 0.05)
+    if not report_items:
+        return pd.DataFrame([{"Bagian": "Belum ada output", "Sintesis": "Jalankan analisis terlebih dahulu agar aplikasi dapat menyusun insight riset."}])
+
+    sig_outputs, nonsig_outputs, assumption_flags, measurement_flags = [], [], [], []
+    for item in report_items:
+        title = str(item.get("title", "Output"))
+        table = item.get("table")
+        if table is None:
+            continue
+        try:
+            df_table = table if isinstance(table, pd.DataFrame) else pd.DataFrame(table)
+        except Exception:
+            continue
+        p = _first_numeric_value(df_table, ["p-value", "p", "Prob(F)", "LLR p-value", "Bartlett p-value"])
+        if p is not None:
+            title_low = title.lower()
+            if any(k in title_low for k in ["normal", "jarque", "levene", "breusch", "diagnostic"]):
+                if ("levene" in title_low and p < alpha) or ("normal" in title_low and p < alpha) or ("breusch" in title_low and p < alpha) or ("diagnostic" in title_low and p < alpha):
+                    assumption_flags.append(f"{title} (p={p_value_text(p)})")
+            elif p < alpha:
+                sig_outputs.append(f"{title} (p={p_value_text(p)})")
+            else:
+                nonsig_outputs.append(f"{title} (p={p_value_text(p)})")
+        a = _first_numeric_value(df_table, ["Cronbach's Alpha"])
+        if a is not None and a < 0.70:
+            measurement_flags.append(f"Reliabilitas perlu perhatian: {title} (α={a:.3f})")
+        kmo = _first_numeric_value(df_table, ["KMO"])
+        if kmo is not None and kmo < 0.60:
+            measurement_flags.append(f"KMO rendah pada {title} (KMO={kmo:.3f})")
+
+    rows = []
+    if sig_outputs:
+        rows.append({"Bagian": "Temuan utama", "Sintesis": "Ada hasil yang mendukung adanya pola/perbedaan/hubungan: " + "; ".join(sig_outputs[:8]) + ". Temuan ini dapat menjadi inti pembahasan riset, tetapi tetap perlu dibaca bersama effect size dan teori."})
+    else:
+        rows.append({"Bagian": "Temuan utama", "Sintesis": "Belum terlihat hasil inferensial yang signifikan pada output tersimpan. Ini tidak otomatis berarti 'tidak ada pengaruh/perbedaan'; bisa jadi efek kecil, sampel kurang besar, instrumen kurang sensitif, atau model belum tepat."})
+    if nonsig_outputs:
+        rows.append({"Bagian": "Temuan non-signifikan", "Sintesis": "Output non-signifikan: " + "; ".join(nonsig_outputs[:8]) + ". Bahas sebagai keterbatasan bukti, bukan sebagai bukti mutlak bahwa fenomena tidak ada."})
+    if assumption_flags:
+        rows.append({"Bagian": "Asumsi & validitas analisis", "Sintesis": "Ada potensi masalah asumsi: " + "; ".join(assumption_flags[:8]) + ". Pertimbangkan transformasi, metode robust, nonparametrik, atau pelaporan caveat."})
+    else:
+        rows.append({"Bagian": "Asumsi & validitas analisis", "Sintesis": "Tidak ada bendera asumsi besar yang terdeteksi dari output tersimpan, atau uji asumsi belum dijalankan. Untuk laporan final, tetap dokumentasikan normalitas, homogenitas, outlier, dan multikolinearitas bila relevan."})
+    if measurement_flags:
+        rows.append({"Bagian": "Kualitas pengukuran", "Sintesis": "Catatan instrumen: " + "; ".join(measurement_flags[:8]) + ". Perbaiki kualitas item/skala sebelum menarik kesimpulan substantif yang kuat."})
+    rows.append({"Bagian": "Narasi riset", "Sintesis": "Susun pembahasan dari pertanyaan riset → hasil deskriptif → uji asumsi → hasil inferensial/model → effect size → implikasi teoritis/praktis → keterbatasan."})
+    rows.append({"Bagian": "Rekomendasi lanjutan", "Sintesis": "Jika hasil signifikan, lanjutkan post-hoc/diagnostik dan visualisasi. Jika tidak signifikan, cek power/ukuran sampel, kualitas variabel, outlier, reliabilitas, serta kesesuaian model dengan teori."})
+    return pd.DataFrame(rows)
+
+
 def df_to_markdown_safe(df: pd.DataFrame) -> str:
     """Render DataFrame ke Markdown tanpa wajib dependency optional `tabulate`."""
     try:
@@ -1059,8 +1415,8 @@ num_cols = numeric_cols(df)
 cat_cols = categorical_cols(df)
 all_cols = df.columns.tolist()
 
-tab_data, tab_transform, tab_desc, tab_tests, tab_model, tab_reliability, tab_visual, tab_export = st.tabs(
-    ["🗂️ Data", "🔁 Transform", "📋 Deskriptif", "🧪 Uji Statistik", "📈 Regresi", "🧭 Reliabilitas & Faktor", "🎨 Visualisasi", "📤 Output & Ekspor"]
+tab_data, tab_transform, tab_desc, tab_tests, tab_model, tab_reliability, tab_visual, tab_insight, tab_export = st.tabs(
+    ["🗂️ Data", "🔁 Transform", "📋 Deskriptif", "🧪 Uji Statistik", "📈 Regresi", "🧭 Reliabilitas & Faktor", "🎨 Visualisasi", "🧠 Insight Riset", "📤 Output & Ekspor"]
 )
 
 with tab_data:
@@ -1842,6 +2198,78 @@ with tab_visual:
             else:
                 st.info("Q-Q plot membutuhkan minimal 3 data non-missing.")
 
+
+with tab_insight:
+    st.subheader("🧠 Insight & Makna Riset")
+    st.markdown(
+        """
+        Modul ini mengubah output statistik menjadi **narasi riset**: apa makna hasilnya,
+        seberapa kuat buktinya, apa implikasinya, dan apa langkah analisis berikutnya.
+        Jalankan analisis di tab lain terlebih dahulu, lalu gunakan bagian ini untuk menyusun pembahasan.
+        """
+    )
+
+    if not st.session_state.report_items:
+        st.info("Belum ada output tersimpan. Jalankan deskriptif/uji statistik/regresi/reliabilitas/EFA terlebih dahulu.")
+    else:
+        insight_alpha = st.slider("α untuk interpretasi insight", 0.01, 0.10, float(st.session_state.get("active_alpha", 0.05)), 0.01, key="insight_alpha")
+        output_titles = [item.get("title", f"Output {i+1}") for i, item in enumerate(st.session_state.report_items)]
+        selected_outputs = st.multiselect(
+            "Pilih output yang ingin dimaknai",
+            output_titles,
+            default=output_titles,
+            help="Pilih semua output untuk sintesis lengkap, atau pilih beberapa output untuk insight spesifik.",
+        )
+
+        c_syn, c_detail = st.columns([0.45, 0.55])
+        with c_syn:
+            st.markdown("### Sintesis Besar")
+            synthesis = build_research_synthesis(
+                [item for item in st.session_state.report_items if item.get("title") in selected_outputs],
+                alpha=insight_alpha,
+            )
+            st.dataframe(synthesis, use_container_width=True)
+            st.caption("Sintesis ini membantu menyusun bagian pembahasan, bukan menggantikan penilaian teoritis peneliti.")
+
+        with c_detail:
+            st.markdown("### Insight per Output")
+            insight_table = build_insight_table(st.session_state.report_items, alpha=insight_alpha, selected_titles=selected_outputs)
+            st.dataframe(insight_table, use_container_width=True)
+
+        st.markdown("### Template Narasi Pembahasan")
+        narasi = []
+        for _, row in synthesis.iterrows():
+            narasi.append(f"**{row['Bagian']}.** {row['Sintesis']}")
+        narasi_text = "\n\n".join(narasi)
+        st.markdown(narasi_text)
+
+        c_save1, c_save2 = st.columns(2)
+        with c_save1:
+            if st.button("💾 Simpan Sintesis ke Output Viewer"):
+                add_report("Sintesis Insight Riset", synthesis, "Sintesis otomatis untuk membantu pemaknaan hasil penelitian.")
+                st.success("Sintesis insight disimpan ke Output Viewer.")
+        with c_save2:
+            if st.button("💾 Simpan Detail Insight ke Output Viewer"):
+                add_report("Detail Insight per Output", insight_table, "Insight otomatis per output statistik.")
+                st.success("Detail insight disimpan ke Output Viewer.")
+
+        st.download_button(
+            "⬇️ Download Narasi Insight Markdown",
+            data=narasi_text.encode("utf-8"),
+            file_name="statistik_pro_insight_riset.md",
+            mime="text/markdown",
+        )
+
+        with st.expander("📌 Cara membaca insight ini"):
+            st.markdown(
+                """
+                - **Signifikan** berarti ada bukti statistik pada α yang dipilih, bukan otomatis penting secara praktis.
+                - **Tidak signifikan** berarti bukti belum cukup, bukan bukti mutlak bahwa efek/hubungan tidak ada.
+                - Selalu baca hasil bersama **effect size**, ukuran sampel, kualitas instrumen, asumsi statistik, dan teori.
+                - Untuk skripsi/tesis/artikel, gunakan insight ini sebagai draf pembahasan lalu sesuaikan dengan konteks variabel dan literatur.
+                """
+            )
+
 with tab_export:
     st.subheader("📤 Ekspor Data & Output")
     st.markdown("Gunakan bagian ini untuk menyimpan data aktif dan output analisis seperti jendela **Output Viewer** di SPSS.")
@@ -1908,4 +2336,4 @@ with st.expander("📖 Catatan Metodologis"):
     )
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3 · SPSS-like Workflow</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.5 · SPSS-like Research Insight Workflow</p>", unsafe_allow_html=True)

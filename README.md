@@ -1,6 +1,6 @@
-# 📊 Statistik Pro+ v3.4 — Alternatif SPSS berbasis Streamlit
+# 📊 Statistik Pro+ v3.5 — Alternatif SPSS berbasis Streamlit
 
-Statistik Pro+ v3.4 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
+Statistik Pro+ v3.5 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
 
 ## ✨ Fitur Utama
 
@@ -77,7 +77,14 @@ Statistik Pro+ v3.4 adalah aplikasi statistik interaktif berbasis Streamlit yang
 - Correlation heatmap
 - Q-Q plot
 
-### 8. Output Viewer & Ekspor
+### 8. Insight & Makna Riset
+- Tab **Insight Riset** untuk mengubah output statistik menjadi narasi pembahasan
+- Sintesis temuan utama dari output tersimpan
+- Insight per output: makna statistik, effect size, kualitas instrumen, kelayakan faktor, dan saran pelaporan
+- Template narasi pembahasan yang bisa diunduh sebagai Markdown
+- Penyimpanan sintesis insight ke Output Viewer
+
+### 9. Output Viewer & Ekspor
 - Output analisis tersimpan seperti Output Viewer sederhana
 - Interpretasi otomatis berbasis p-value/effect/model summary
 - Ekspor:
@@ -98,7 +105,7 @@ streamlit run app.py
 ## 📁 File dalam paket
 
 ```text
-statistik_pro_spss_v3_4/
+statistik_pro_spss_v3_5/
 ├── app.py
 ├── requirements.txt
 ├── README.md
@@ -119,7 +126,7 @@ Untuk laporan akademik, sebaiknya selalu laporkan statistik uji, derajat kebebas
 
 ---
 
-Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.4
+Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.5
 
 
 ## Catatan Versi 3.2
@@ -133,3 +140,10 @@ Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.4
 - EFA kini memiliki **engine fallback stabil** tanpa `factor-analyzer`.
 - Jika terjadi konflik `force_all_finite` / `ensure_all_finite` pada scikit-learn terbaru, pilih menu **Engine EFA → Fallback stabil tanpa factor-analyzer**.
 - Aplikasi tetap mencoba `factor-analyzer` terlebih dahulu pada mode otomatis, lalu berpindah ke fallback bila dependency bermasalah.
+
+
+## Catatan v3.5
+
+- Menambahkan modul **Insight & Makna Riset**.
+- Aplikasi kini tidak hanya menampilkan angka statistik, tetapi juga membantu menyusun makna riset: temuan utama, hasil non-signifikan, asumsi, kualitas pengukuran, dan rekomendasi analisis lanjutan.
+- Insight dapat disimpan ke Output Viewer dan diekspor bersama laporan.
