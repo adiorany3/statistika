@@ -120,7 +120,7 @@ except Exception:  # pragma: no cover
 
 
 APP_NAME = "Statistik Pro+"
-APP_SUBTITLE = "Alternatif SPSS berbasis Streamlit untuk analisis data, uji statistik, regresi, visualisasi, dan ekspor hasil."
+APP_SUBTITLE = "Alternatif SPSS berbasis Streamlit: lengkap untuk analisis statistik, namun dipandu dengan UI sederhana untuk pemula dan mode detail untuk pengguna ahli."
 
 st.set_page_config(page_title=f"{APP_NAME} - Alternatif SPSS", page_icon="📊", layout="wide")
 
@@ -249,7 +249,21 @@ st.markdown(
         .stat-card {
             padding: 1rem; border-radius: 0.9rem; border: 1px solid #e5e7eb;
             background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            min-height: 96px;
         }
+        .guide-card {
+            padding: 1rem; border-radius: 1rem; border: 1px solid #dbeafe;
+            background: #eff6ff; margin-bottom: 0.7rem;
+        }
+        .soft-card {
+            padding: 1rem; border-radius: 1rem; border: 1px solid #e5e7eb;
+            background: #ffffff; margin-bottom: 0.7rem;
+        }
+        .ok-box {padding: .75rem; border-radius: .8rem; background:#ecfdf5; border:1px solid #bbf7d0;}
+        .warn-box {padding: .75rem; border-radius: .8rem; background:#fffbeb; border:1px solid #fde68a;}
+        .danger-box {padding: .75rem; border-radius: .8rem; background:#fef2f2; border:1px solid #fecaca;}
+        .tiny {font-size: 0.86rem; color: #6b7280;}
+        .step-pill {display:inline-block; padding: .25rem .55rem; border-radius:999px; background:#f3f4f6; margin:.15rem; font-size:.85rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -267,6 +281,8 @@ def init_state():
         "split_by": "(tidak ada)",
         "active_alpha": 0.05,
         "last_action": None,
+        "ui_mode": "Pemula",
+        "detail_level": "Ringkas",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1969,6 +1985,44 @@ def detect_repair_actions(df):
             "Dampak": "Membingungkan user dan bisa mengganggu pilihan variabel.",
             "Tindakan": "Hapus kolom yang seluruh nilainya kosong.",
         })
+    text_cols_with_spaces = []
+    for col in df.columns:
+        if df[col].dtype == object:
+            before = df[col].astype(str)
+            after = before.str.strip().str.replace(r"\s+", " ", regex=True)
+            if int((before != after).sum()) > 0:
+                text_cols_with_spaces.append(col)
+    if text_cols_with_spaces:
+        actions.append({
+            "Kode": "trim_text_spaces",
+            "Masalah": "Ada kategori/teks dengan spasi berlebih",
+            "Dampak": "Kategori seperti 'A' dan ' A ' bisa dianggap berbeda.",
+            "Tindakan": "Rapikan spasi pada kolom teks/kategori.",
+        })
+    if df.isna().any().any():
+        actions.append({
+            "Kode": "impute_basic",
+            "Masalah": "Ada missing value",
+            "Dampak": "Beberapa analisis membuang baris kosong sehingga sampel efektif mengecil.",
+            "Tindakan": "Isi missing sederhana: numerik=median, kategori=modus.",
+        })
+    outlier_cols = []
+    for col in df.select_dtypes(include=[np.number]).columns:
+        s = df[col].dropna()
+        if len(s) >= 8:
+            q1, q3 = s.quantile([0.25, 0.75])
+            iqr = q3 - q1
+            if iqr > 0:
+                count = int(((s < q1 - 3*iqr) | (s > q3 + 3*iqr)).sum())
+                if count:
+                    outlier_cols.append(f"{col} ({count})")
+    if outlier_cols:
+        actions.append({
+            "Kode": "winsorize_extreme_outliers",
+            "Masalah": "Ada outlier numerik ekstrem",
+            "Dampak": "Mean, korelasi, regresi, dan ANOVA bisa sangat dipengaruhi nilai ekstrem.",
+            "Tindakan": "Winsorize outlier ekstrem ke batas 3×IQR.",
+        })
     return pd.DataFrame(actions)
 
 
@@ -2003,6 +2057,46 @@ def apply_repair_action(df, action_code):
         cols = [c for c in repaired.columns if repaired[c].isna().all()]
         repaired = repaired.drop(columns=cols)
         note = "Kolom kosong total dihapus: " + (", ".join(map(str, cols)) if cols else "tidak ada")
+    elif action_code == "trim_text_spaces":
+        cols = []
+        for col in repaired.columns:
+            if repaired[col].dtype == object:
+                repaired[col] = repaired[col].astype(str).str.strip().str.replace(r"\s+", " ", regex=True).replace({"nan": np.nan, "None": np.nan})
+                cols.append(col)
+        note = "Spasi berlebih pada teks/kategori dirapikan: " + (", ".join(map(str, cols)) if cols else "tidak ada")
+    elif action_code == "impute_basic":
+        changes = []
+        for col in repaired.columns:
+            miss = int(repaired[col].isna().sum())
+            if miss == 0:
+                continue
+            if pd.api.types.is_numeric_dtype(repaired[col]):
+                fill = repaired[col].median()
+                repaired[col] = repaired[col].fillna(fill)
+                changes.append(f"{col}=median")
+            else:
+                mode = repaired[col].mode(dropna=True)
+                if not mode.empty:
+                    repaired[col] = repaired[col].fillna(mode.iloc[0])
+                    changes.append(f"{col}=modus")
+        note = "Missing value diisi sederhana (gunakan hanya bila sesuai desain riset): " + (", ".join(changes) if changes else "tidak ada")
+    elif action_code == "winsorize_extreme_outliers":
+        changes = []
+        for col in repaired.select_dtypes(include=[np.number]).columns:
+            s = repaired[col].dropna()
+            if len(s) < 8:
+                continue
+            q1, q3 = s.quantile([0.25, 0.75])
+            iqr = q3 - q1
+            if iqr <= 0:
+                continue
+            lo, hi = q1 - 3*iqr, q3 + 3*iqr
+            before = repaired[col].copy()
+            repaired[col] = repaired[col].clip(lo, hi)
+            changed = int((before != repaired[col]).sum())
+            if changed:
+                changes.append(f"{col} ({changed})")
+        note = "Outlier ekstrem di-winsorize ke batas 3×IQR: " + (", ".join(changes) if changes else "tidak ada")
     else:
         note = "Tidak ada tindakan yang diterapkan."
     return repaired, note
@@ -2322,6 +2416,280 @@ Sebutkan keterbatasan seperti ukuran sampel, missing value, asumsi yang tidak te
 Berikan langkah berikutnya: tambah data, perbaiki instrumen, lakukan post-hoc, uji model alternatif, atau validasi pada sampel lain.
 """
 
+
+
+# -----------------------------------------------------------------------------
+# Guided UI & comprehensive guidance v4.0
+# -----------------------------------------------------------------------------
+def ui_mode_is_beginner():
+    return st.session_state.get("ui_mode", "Pemula") == "Pemula"
+
+
+def detail_is_full():
+    return st.session_state.get("detail_level", "Ringkas") == "Lengkap"
+
+
+def card_html(title, body, icon="", tone="soft"):
+    klass = "guide-card" if tone == "guide" else "soft-card"
+    return f"""<div class='{klass}'><b>{icon} {title}</b><br><span class='tiny'>{body}</span></div>"""
+
+
+def status_color_label(score):
+    if score >= 85:
+        return "Sangat siap", "ok-box"
+    if score >= 70:
+        return "Cukup siap", "ok-box"
+    if score >= 50:
+        return "Perlu perbaikan ringan", "warn-box"
+    return "Perlu dibersihkan dulu", "danger-box"
+
+
+def variable_role_suggestions(df):
+    rows = []
+    n = len(df)
+    for col in df.columns:
+        s = df[col]
+        nonmiss = int(s.notna().sum())
+        miss_pct = float(s.isna().mean() * 100)
+        unique = int(s.nunique(dropna=True))
+        var_type = classify_variable(df, col)
+        role = []
+        avoid = []
+        if pd.api.types.is_numeric_dtype(s):
+            if unique <= 1:
+                role.append("Tidak disarankan untuk analisis")
+                avoid.append("Kolom tidak punya variasi")
+            elif unique == n and str(col).lower() in ["id", "kode", "no", "nomor", "responden", "nama"]:
+                role.append("ID/identitas")
+                avoid.append("Jangan dipakai sebagai variabel statistik")
+            elif unique <= 10 and np.allclose(pd.to_numeric(s.dropna(), errors="coerce") % 1, 0):
+                role.append("Ordinal/kode kategori")
+                role.append("Grup jika maknanya kategori")
+                avoid.append("Jangan dianggap skala jika sebenarnya kode")
+            else:
+                role.append("Variabel hasil/skor")
+                role.append("Prediktor numerik")
+                role.append("Item skala/kuesioner bila berasal dari Likert")
+        else:
+            if unique <= 1:
+                role.append("Tidak disarankan")
+                avoid.append("Tidak ada variasi")
+            elif unique == 2:
+                role.append("Grup 2 kategori")
+                role.append("Target logistik biner")
+            elif unique <= 10:
+                role.append("Grup/kategori")
+                role.append("Faktor ANOVA/Chi-square")
+            else:
+                role.append("Label/teks bebas")
+                avoid.append("Recode/ringkas dulu bila ingin dianalisis")
+        if miss_pct > 30:
+            avoid.append("Missing value tinggi")
+        rows.append({
+            "Kolom": col,
+            "Tipe terbaca": var_type,
+            "Isi valid": f"{nonmiss}/{n}",
+            "Missing %": round(miss_pct, 2),
+            "Kategori/nilai unik": unique,
+            "Peran yang cocok": "; ".join(role),
+            "Perlu hati-hati": "; ".join(avoid) if avoid else "-",
+        })
+    return pd.DataFrame(rows)
+
+
+def build_next_best_actions(df, issues, score):
+    num = numeric_cols(df)
+    cat = categorical_cols(df)
+    actions = []
+    critical = [i for i in issues if i.get("Prioritas") == "Kritis"]
+    high = [i for i in issues if i.get("Prioritas") == "Tinggi"]
+    if critical:
+        actions.append({"Urutan": 1, "Langkah": "Perbaiki masalah kritis", "Menu": "🧰 Kompatibilitas Data", "Kenapa": critical[0].get("Masalah", "Ada masalah kritis pada data")})
+    elif high:
+        actions.append({"Urutan": 1, "Langkah": "Bersihkan format data", "Menu": "🧙 Smart Assistant → Data Repair Assistant", "Kenapa": high[0].get("Masalah", "Ada masalah data prioritas tinggi")})
+    else:
+        actions.append({"Urutan": 1, "Langkah": "Lihat profil dan pola awal", "Menu": "📋 Deskriptif", "Kenapa": "Data cukup siap; mulai dari ringkasan dan frekuensi"})
+    if len(num) >= 2:
+        actions.append({"Urutan": 2, "Langkah": "Cek hubungan dan grafik", "Menu": "🎨 Visualisasi + 🧪 Uji Statistik", "Kenapa": "Ada minimal dua variabel numerik untuk korelasi/scatter"})
+    elif num and cat:
+        actions.append({"Urutan": 2, "Langkah": "Bandingkan skor antar kelompok", "Menu": "🧙 Smart Assistant → Wizard Uji Otomatis", "Kenapa": "Ada skor numerik dan variabel grup/kategori"})
+    else:
+        actions.append({"Urutan": 2, "Langkah": "Atur tipe variabel", "Menu": "🗂️ Data → Variable View", "Kenapa": "Variabel numerik/kategori belum cukup jelas"})
+    actions.append({"Urutan": 3, "Langkah": "Jalankan analisis utama", "Menu": "🧪 Uji Statistik / 📈 Regresi / 🧭 Reliabilitas & Faktor", "Kenapa": "Pilih sesuai pertanyaan riset"})
+    actions.append({"Urutan": 4, "Langkah": "Maknai dan ekspor laporan", "Menu": "🧠 Insight Riset + 📤 Output & Ekspor", "Kenapa": "Hasil perlu diterjemahkan menjadi kesimpulan riset"})
+    return pd.DataFrame(actions)
+
+
+def analysis_decision_matrix(df):
+    num = numeric_cols(df)
+    cat = categorical_cols(df)
+    rows = [
+        {"Pertanyaan user awam": "Apakah satu nilai rata-rata berbeda dari target tertentu?", "Data yang dibutuhkan": "1 variabel numerik", "Uji utama": "One-Sample T-Test", "Alternatif aman": "Wilcoxon one-sample/cek CI", "Status dataset": "Siap" if len(num) >= 1 else "Belum siap"},
+        {"Pertanyaan user awam": "Apakah dua kelompok punya rata-rata berbeda?", "Data yang dibutuhkan": "1 variabel skor + 1 grup dua kategori", "Uji utama": "Independent T-Test", "Alternatif aman": "Mann-Whitney U", "Status dataset": "Siap" if num and any(df[c].dropna().nunique()==2 for c in df.columns) else "Perlu grup 2 kategori"},
+        {"Pertanyaan user awam": "Apakah nilai sebelum-sesudah berubah?", "Data yang dibutuhkan": "2 kolom numerik berpasangan", "Uji utama": "Paired T-Test", "Alternatif aman": "Wilcoxon Signed-Rank", "Status dataset": "Siap" if len(num) >= 2 else "Perlu 2 kolom numerik"},
+        {"Pertanyaan user awam": "Apakah 3+ kelompok berbeda?", "Data yang dibutuhkan": "Skor numerik + grup 3+ kategori", "Uji utama": "One-Way ANOVA", "Alternatif aman": "Kruskal-Wallis + Dunn", "Status dataset": "Siap" if num and any(3 <= df[c].dropna().nunique() <= 20 for c in df.columns) else "Perlu grup 3+ kategori"},
+        {"Pertanyaan user awam": "Apakah dua variabel berhubungan?", "Data yang dibutuhkan": "2 variabel numerik/ordinal", "Uji utama": "Pearson/Spearman", "Alternatif aman": "Kendall/visual scatter", "Status dataset": "Siap" if len(num) >= 2 else "Perlu 2 variabel numerik"},
+        {"Pertanyaan user awam": "Faktor apa yang memprediksi hasil?", "Data yang dibutuhkan": "Y numerik + X prediktor", "Uji utama": "Regresi Linear", "Alternatif aman": "Transformasi/robust/cek VIF", "Status dataset": "Siap" if len(num) >= 2 else "Perlu target dan prediktor"},
+        {"Pertanyaan user awam": "Apakah dua kategori saling berkaitan?", "Data yang dibutuhkan": "2 variabel kategori", "Uji utama": "Chi-Square", "Alternatif aman": "Fisher Exact", "Status dataset": "Siap" if len(cat) >= 2 else "Perlu 2 kategori"},
+        {"Pertanyaan user awam": "Apakah item kuesioner konsisten?", "Data yang dibutuhkan": "≥3 item numeric satu konstruk", "Uji utama": "Cronbach's Alpha", "Alternatif aman": "Item-total, Omega", "Status dataset": "Siap" if len(num) >= 3 else "Perlu ≥3 item"},
+        {"Pertanyaan user awam": "Dimensi/faktor apa yang muncul dari item?", "Data yang dibutuhkan": "≥3 item numeric + sampel cukup", "Uji utama": "EFA/PAF", "Alternatif aman": "PCA eksploratori", "Status dataset": "Siap/eksploratif" if len(num) >= 3 else "Perlu ≥3 item"},
+    ]
+    return pd.DataFrame(rows)
+
+
+def comprehensive_ui_feature_map():
+    return pd.DataFrame([
+        {"Area": "Data", "Fitur": "Import CSV/Excel/SPSS, Data View, Variable View", "Untuk pemula": "Mulai dari Upload/Data Contoh", "Untuk ahli": "Atur value labels, measure, missing values"},
+        {"Area": "Kualitas data", "Fitur": "Compatibility Checker, Quality Score, Data Repair", "Untuk pemula": "Ikuti tombol saran perbaikan", "Untuk ahli": "Audit missing/outlier/tipe variabel"},
+        {"Area": "Transformasi", "Fitur": "Compute, recode, reverse coding, z-score, filter, split", "Untuk pemula": "Pakai wizard/repair dulu", "Untuk ahli": "Gunakan Transform untuk workflow SPSS-like"},
+        {"Area": "Analisis dasar", "Fitur": "Deskriptif, frekuensi, normalitas, crosstab", "Untuk pemula": "Baca ringkasan dan interpretasi", "Untuk ahli": "Cek asumsi dan distribusi"},
+        {"Area": "Uji hipotesis", "Fitur": "T-test, ANOVA, nonparametrik, chi-square, post-hoc", "Untuk pemula": "Pilih lewat Wizard Uji Otomatis", "Untuk ahli": "Pilih langsung di menu Uji Statistik"},
+        {"Area": "Model", "Fitur": "Regresi linear/logistik, VIF, residual diagnostics", "Untuk pemula": "Gunakan saat ingin memprediksi Y", "Untuk ahli": "Cek model fit, asumsi, multikolinearitas"},
+        {"Area": "Instrumen", "Fitur": "Reliabilitas, PCA, EFA/PAF, KMO, Bartlett", "Untuk pemula": "Gunakan untuk item kuesioner", "Untuk ahli": "Tinjau loading, communality, variance"},
+        {"Area": "Pelaporan", "Fitur": "Insight riset, template BAB 4/APA, ekspor Excel/Word/HTML/MD", "Untuk pemula": "Ambil narasi awal lalu sesuaikan teori", "Untuk ahli": "Gunakan output viewer dan syntax log"},
+    ])
+
+
+def research_design_planner_table(design, objective, sample_context):
+    base = [
+        {"Tahap": "1. Rumusan masalah", "Yang perlu diisi": "Apa fenomena/variabel utama?", "Contoh keputusan": objective or "Bandingkan/hubungkan/prediksi variabel"},
+        {"Tahap": "2. Desain data", "Yang perlu diisi": "Cross-sectional, eksperimen, pre-post, longitudinal", "Contoh keputusan": design},
+        {"Tahap": "3. Variabel", "Yang perlu diisi": "Tentukan Y, X, grup, kontrol, item skala", "Contoh keputusan": "Gunakan Variable View agar tipe/measure jelas"},
+        {"Tahap": "4. Ukuran sampel", "Yang perlu diisi": "Target power, alpha, effect size", "Contoh keputusan": "Gunakan Sample Size & Power"},
+        {"Tahap": "5. Kualitas data", "Yang perlu diisi": "Missing, outlier, coding, normalitas, homogenitas", "Contoh keputusan": "Jalankan Kompatibilitas Data sebelum uji"},
+        {"Tahap": "6. Analisis utama", "Yang perlu diisi": "Uji/model sesuai pertanyaan", "Contoh keputusan": "Wizard akan menyarankan uji utama + alternatif"},
+        {"Tahap": "7. Pelaporan", "Yang perlu diisi": "p-value, effect size, CI, asumsi, makna substantif", "Contoh keputusan": "Gunakan Insight Riset + Output Export"},
+    ]
+    if sample_context:
+        base.append({"Tahap": "Catatan konteks", "Yang perlu diisi": "Konteks sampel/populasi", "Contoh keputusan": sample_context})
+    return pd.DataFrame(base)
+
+
+def assumption_playbook_table():
+    return pd.DataFrame([
+        {"Asumsi/masalah": "Normalitas", "Kapan dicek": "T-test/ANOVA/regresi terutama N kecil", "Cara cek": "Shapiro-Wilk, Q-Q plot, histogram residual", "Jika bermasalah": "Gunakan transformasi, uji nonparametrik, bootstrap/robust, atau laporkan keterbatasan"},
+        {"Asumsi/masalah": "Homogenitas varians", "Kapan dicek": "T-test independen/ANOVA", "Cara cek": "Levene test", "Jika bermasalah": "Welch t-test/ANOVA atau nonparametrik"},
+        {"Asumsi/masalah": "Outlier", "Kapan dicek": "Semua analisis numerik", "Cara cek": "Boxplot, z-score, IQR, Cook's distance", "Jika bermasalah": "Verifikasi input, winsorize dengan alasan, analisis sensitif"},
+        {"Asumsi/masalah": "Linearitas", "Kapan dicek": "Korelasi/regresi", "Cara cek": "Scatter plot, residual plot", "Jika bermasalah": "Transformasi, model non-linear, Spearman"},
+        {"Asumsi/masalah": "Multikolinearitas", "Kapan dicek": "Regresi berganda", "Cara cek": "VIF/Tolerance", "Jika bermasalah": "Hapus/gabung prediktor, PCA, pilih variabel berdasar teori"},
+        {"Asumsi/masalah": "Independensi", "Kapan dicek": "Semua uji inferensial", "Cara cek": "Desain sampling; Durbin-Watson untuk residual berurutan", "Jika bermasalah": "Gunakan paired/repeated/mixed model sesuai desain"},
+        {"Asumsi/masalah": "Expected count kecil", "Kapan dicek": "Chi-square", "Cara cek": "Expected frequency tabel kontingensi", "Jika bermasalah": "Fisher Exact, gabungkan kategori bermakna"},
+        {"Asumsi/masalah": "Kelayakan EFA", "Kapan dicek": "Analisis faktor", "Cara cek": "KMO, Bartlett, communality", "Jika bermasalah": "Hapus item lemah, tambah sampel, revisi konstruk"},
+    ])
+
+
+def effect_size_reference_table():
+    return pd.DataFrame([
+        {"Analisis": "T-test", "Ukuran efek": "Cohen's d / Hedges g", "Kecil": "≈0.20", "Sedang": "≈0.50", "Besar": "≈0.80", "Makna awam": "Besar perbedaan antar rata-rata"},
+        {"Analisis": "ANOVA", "Ukuran efek": "η² / partial η² / ω²", "Kecil": "≈0.01", "Sedang": "≈0.06", "Besar": "≈0.14", "Makna awam": "Proporsi variasi Y yang dijelaskan kelompok"},
+        {"Analisis": "Korelasi", "Ukuran efek": "r / r²", "Kecil": "≈0.10", "Sedang": "≈0.30", "Besar": "≈0.50", "Makna awam": "Kekuatan hubungan antar variabel"},
+        {"Analisis": "Regresi", "Ukuran efek": "R² / adjusted R² / β", "Kecil": "kontekstual", "Sedang": "kontekstual", "Besar": "kontekstual", "Makna awam": "Seberapa baik model menjelaskan/memprediksi Y"},
+        {"Analisis": "Chi-square", "Ukuran efek": "Cramer's V", "Kecil": "≈0.10", "Sedang": "≈0.30", "Besar": "≈0.50", "Makna awam": "Kekuatan asosiasi antar kategori"},
+        {"Analisis": "Mann-Whitney", "Ukuran efek": "Rank-biserial / r", "Kecil": "≈0.10", "Sedang": "≈0.30", "Besar": "≈0.50", "Makna awam": "Seberapa jelas perbedaan peringkat antar kelompok"},
+        {"Analisis": "Reliabilitas", "Ukuran efek": "Cronbach's alpha", "Rendah": "<0.60", "Cukup": "0.60–0.70", "Baik": ">=0.70", "Makna awam": "Konsistensi item dalam satu skala"},
+    ])
+
+
+def glossary_table():
+    return pd.DataFrame([
+        {"Istilah": "p-value", "Makna sederhana": "Seberapa kuat data menentang H0; bukan ukuran besar efek", "Jangan disalahartikan sebagai": "Probabilitas hipotesis benar/salah"},
+        {"Istilah": "Alpha (α)", "Makna sederhana": "Batas keputusan, sering 0.05", "Jangan disalahartikan sebagai": "Kebenaran mutlak"},
+        {"Istilah": "Effect size", "Makna sederhana": "Besar/kekuatan temuan secara praktis", "Jangan disalahartikan sebagai": "Pengganti desain riset yang baik"},
+        {"Istilah": "Confidence interval", "Makna sederhana": "Rentang estimasi yang masuk akal", "Jangan disalahartikan sebagai": "Rentang 95% data mentah"},
+        {"Istilah": "Normalitas", "Makna sederhana": "Pola distribusi data/residual mendekati lonceng", "Jangan disalahartikan sebagai": "Wajib sempurna untuk semua kondisi"},
+        {"Istilah": "Reliabilitas", "Makna sederhana": "Konsistensi item dalam mengukur konstruk", "Jangan disalahartikan sebagai": "Validitas/kebenaran konstruk"},
+        {"Istilah": "EFA", "Makna sederhana": "Mencari struktur faktor/dimensi dari banyak item", "Jangan disalahartikan sebagai": "Bukti final tanpa teori/validasi"},
+    ])
+
+
+def data_format_recipes_table():
+    return pd.DataFrame([
+        {"Kebutuhan analisis": "T-test independen", "Format terbaik": "1 kolom skor + 1 kolom grup", "Contoh": "nilai, kelompok"},
+        {"Kebutuhan analisis": "Paired t-test", "Format terbaik": "1 baris = 1 responden; kolom pre dan post", "Contoh": "pretest, posttest"},
+        {"Kebutuhan analisis": "ANOVA", "Format terbaik": "1 kolom skor + 1 kolom grup 3+ kategori", "Contoh": "kepuasan, kelas"},
+        {"Kebutuhan analisis": "Korelasi/regresi", "Format terbaik": "Setiap variabel numerik dalam kolom terpisah", "Contoh": "motivasi, jam_belajar, nilai"},
+        {"Kebutuhan analisis": "Reliabilitas/EFA", "Format terbaik": "Setiap item kuesioner menjadi kolom numerik", "Contoh": "item1, item2, item3"},
+        {"Kebutuhan analisis": "Chi-square", "Format terbaik": "Dua kolom kategori, bukan angka total ringkasan", "Contoh": "gender, pilihan_produk"},
+    ])
+
+
+def render_quick_start(df, num_cols, cat_cols, all_cols):
+    st.subheader("🚀 Mulai Cepat — Dipandu, Tidak Membingungkan")
+    st.caption("Halaman ini merangkum kondisi data dan memberi urutan kerja. Detail statistik tetap tersedia, tetapi dibuka bertahap.")
+    issues = analyze_data_compatibility(df, st.session_state.get("metadata"))
+    score = compatibility_score(issues)
+    label, klass = status_color_label(score)
+
+    a, b, c, d = st.columns(4)
+    a.metric("Skor kesiapan", f"{score}/100", label)
+    b.metric("Baris data", f"{df.shape[0]:,}")
+    c.metric("Kolom numerik", len(num_cols))
+    d.metric("Kolom kategori", len(cat_cols))
+
+    st.markdown(f"<div class='{klass}'><b>Status data: {label}</b><br><span class='tiny'>Gunakan rekomendasi langkah berikutnya di bawah agar analisis tidak asal klik.</span></div>", unsafe_allow_html=True)
+
+    st.markdown("### Jalur kerja yang disarankan")
+    next_actions = build_next_best_actions(df, issues, score)
+    st.dataframe(next_actions, use_container_width=True, hide_index=True)
+
+    q1, q2, q3 = st.columns(3)
+    with q1:
+        st.markdown(card_html("Saya belum tahu uji apa", "Buka Smart Assistant → Wizard Uji Otomatis. Pilih tujuan riset dan variabel; aplikasi akan menyarankan uji.", "🧙", "guide"), unsafe_allow_html=True)
+    with q2:
+        st.markdown(card_html("Data saya berantakan", "Buka Kompatibilitas Data atau Data Repair Assistant. Aplikasi memberi tahu apa yang perlu diubah, ditambah, atau diganti.", "🧰", "guide"), unsafe_allow_html=True)
+    with q3:
+        st.markdown(card_html("Saya butuh laporan", "Jalankan analisis, lalu buka Insight Riset dan Output & Ekspor untuk narasi dan file laporan.", "📝", "guide"), unsafe_allow_html=True)
+
+    st.markdown("### Analisis yang mungkin cocok untuk dataset ini")
+    st.dataframe(suggest_analysis_table(df), use_container_width=True, hide_index=True)
+
+    with st.expander("Lihat peran tiap kolom — cocok untuk Y, X, grup, atau item?", expanded=detail_is_full()):
+        st.dataframe(variable_role_suggestions(df), use_container_width=True, hide_index=True)
+
+    with st.expander("Peta lengkap fitur aplikasi", expanded=False):
+        st.dataframe(comprehensive_ui_feature_map(), use_container_width=True, hide_index=True)
+
+    if st.button("💾 Simpan ringkasan mulai cepat ke Output Viewer", key="save_quick_start_summary"):
+        summary = pd.concat([
+            next_actions.assign(Tabel="Langkah berikutnya"),
+            suggest_analysis_table(df).rename(columns={"Uji/Analisis": "Langkah"}).assign(Tabel="Saran analisis"),
+        ], ignore_index=True, sort=False)
+        add_report("Ringkasan Mulai Cepat", summary, f"Skor kesiapan data: {score}/100 ({label}).")
+        st.success("Ringkasan disimpan ke Output Viewer.")
+
+
+def render_reference_center(df):
+    st.subheader("📚 Panduan Lengkap & Glosarium")
+    st.caption("Bagian ini menyimpan detail agar UI utama tetap bersih. Cocok untuk belajar, mengecek asumsi, dan menyiapkan laporan.")
+    guide_mode = st.radio(
+        "Pilih panduan",
+        ["Pohon Keputusan Uji", "Asumsi & Solusi", "Effect Size", "Format Data", "Glosarium", "Checklist Laporan"],
+        horizontal=True,
+        key="reference_center_mode",
+    )
+    if guide_mode == "Pohon Keputusan Uji":
+        st.dataframe(analysis_decision_matrix(df), use_container_width=True, hide_index=True)
+    elif guide_mode == "Asumsi & Solusi":
+        st.dataframe(assumption_playbook_table(), use_container_width=True, hide_index=True)
+    elif guide_mode == "Effect Size":
+        st.dataframe(effect_size_reference_table(), use_container_width=True, hide_index=True)
+        st.info("Baca effect size bersama konteks riset. Nilai kecil tetap bisa penting jika dampaknya luas; nilai besar perlu tetap dicek validitas datanya.")
+    elif guide_mode == "Format Data":
+        st.dataframe(data_format_recipes_table(), use_container_width=True, hide_index=True)
+        st.markdown("<span class='step-pill'>1 baris = 1 responden/observasi</span> <span class='step-pill'>1 kolom = 1 variabel</span> <span class='step-pill'>Kode kategori konsisten</span> <span class='step-pill'>Missing value jelas</span>", unsafe_allow_html=True)
+    elif guide_mode == "Glosarium":
+        st.dataframe(glossary_table(), use_container_width=True, hide_index=True)
+    else:
+        checklist = pd.DataFrame([
+            {"Bagian laporan": "Deskripsi data", "Harus ada": "N, mean/median, SD/IQR, frekuensi kategori"},
+            {"Bagian laporan": "Asumsi", "Harus ada": "Normalitas/homogenitas/outlier/VIF sesuai analisis"},
+            {"Bagian laporan": "Hasil utama", "Harus ada": "Statistik uji, df, p-value, CI, effect size"},
+            {"Bagian laporan": "Makna riset", "Harus ada": "Arah temuan, besar dampak, kaitan dengan teori"},
+            {"Bagian laporan": "Keterbatasan", "Harus ada": "Sampel, missing, asumsi, desain, generalisasi"},
+            {"Bagian laporan": "Rekomendasi", "Harus ada": "Analisis lanjutan atau keputusan praktis"},
+        ])
+        st.dataframe(checklist, use_container_width=True, hide_index=True)
+
 # Header
 left, right = st.columns([0.72, 0.28])
 with left:
@@ -2333,6 +2701,31 @@ with right:
 # Sidebar input
 st.sidebar.header("📥 Input Data")
 source = st.sidebar.radio("Sumber data", ["Upload File", "Input Manual", "Data Contoh"], index=0)
+
+st.sidebar.divider()
+st.sidebar.subheader("🧭 Tampilan")
+st.session_state.ui_mode = st.sidebar.radio(
+    "Mode pengguna",
+    ["Pemula", "Ahli"],
+    index=0 if st.session_state.get("ui_mode", "Pemula") == "Pemula" else 1,
+    help="Pemula menampilkan alur ringkas; Ahli membuka semua menu teknis.",
+    key="ui_mode_selector",
+)
+st.session_state.detail_level = st.sidebar.radio(
+    "Level detail",
+    ["Ringkas", "Lengkap"],
+    index=0 if st.session_state.get("detail_level", "Ringkas") == "Ringkas" else 1,
+    help="Ringkas menyembunyikan tabel/penjelasan lanjutan di expander.",
+    key="detail_level_selector",
+)
+with st.sidebar.expander("Cara pakai cepat", expanded=False):
+    st.markdown("""
+    1. Upload data atau pakai data contoh.  
+    2. Buka **🚀 Mulai Cepat**.  
+    3. Ikuti rekomendasi perbaikan data.  
+    4. Pilih uji melalui **Smart Assistant**.  
+    5. Maknai hasil di **Insight Riset** dan ekspor laporan.
+    """)
 
 if st.sidebar.button("🗑️ Reset semua data & output"):
     for key in ["df", "raw_df", "file_name", "report_items", "metadata", "syntax_log", "split_by", "last_action"]:
@@ -2407,7 +2800,8 @@ if df is None:
             - Output Viewer, ekspor Excel/HTML/Markdown/Word, serta interpretasi otomatis.
             - Statistik deskriptif, frekuensi, normalitas, korelasi, crosstab, chi-square.
             - T-test, ANOVA + Tukey HSD, uji nonparametrik, regresi linear/logistik.
-            - Reliabilitas Cronbach's alpha, PCA, visualisasi interaktif, dan ekspor output ke Excel.
+            - Reliabilitas Cronbach's alpha, PCA, EFA/PAF, visualisasi interaktif, dan ekspor output ke Excel/Word/HTML.
+            - Mode Pemula/Ahli, halaman Mulai Cepat, pohon keputusan uji, effect size guide, dan glosarium statistik.
             """
         )
     st.stop()
@@ -2418,19 +2812,41 @@ cat_cols = categorical_cols(df)
 all_cols = df.columns.tolist()
 
 # Navigasi utama stabil: hanya menu aktif yang dirender
-section_labels = ['🗂️ Data', '🧰 Kompatibilitas Data', '🧙 Smart Assistant', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor']
+if ui_mode_is_beginner():
+    section_labels = ['🚀 Mulai Cepat', '🧙 Smart Assistant', '🧰 Kompatibilitas Data', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor', '📚 Panduan']
+else:
+    section_labels = ['🚀 Mulai Cepat', '🗂️ Data', '🧰 Kompatibilitas Data', '🧙 Smart Assistant', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor', '📚 Panduan']
 nav_method = getattr(st, "segmented_control", None)
+nav_key_suffix = "beginner" if ui_mode_is_beginner() else "expert"
 if nav_method is not None:
     try:
-        active_section = nav_method("Navigasi utama", section_labels, selection_mode="single", default=section_labels[0], label_visibility="collapsed", key="main_section_nav")
+        active_section = nav_method("Navigasi utama", section_labels, selection_mode="single", default=section_labels[0], label_visibility="collapsed", key=f"main_section_nav_{nav_key_suffix}")
     except TypeError:
-        active_section = st.radio("Navigasi utama", section_labels, horizontal=True, label_visibility="collapsed", key="main_section_nav_radio")
+        active_section = st.radio("Navigasi utama", section_labels, horizontal=True, label_visibility="collapsed", key=f"main_section_nav_radio_{nav_key_suffix}")
 else:
-    active_section = st.radio("Navigasi utama", section_labels, horizontal=True, label_visibility="collapsed", key="main_section_nav_radio")
-if active_section is None:
+    active_section = st.radio("Navigasi utama", section_labels, horizontal=True, label_visibility="collapsed", key=f"main_section_nav_radio_{nav_key_suffix}")
+if active_section is None or active_section not in section_labels:
     active_section = section_labels[0]
 
-if active_section == '🗂️ Data':
+if active_section == '🚀 Mulai Cepat':
+    try:
+        render_quick_start(df, num_cols, cat_cols, all_cols)
+    except BaseException as exc:
+        if _is_streamlit_control_exception(exc):
+            raise
+        st.error("Bagian 🚀 Mulai Cepat mengalami kendala, tetapi aplikasi tetap berjalan.")
+        st.exception(exc)
+
+elif active_section == '📚 Panduan':
+    try:
+        render_reference_center(df)
+    except BaseException as exc:
+        if _is_streamlit_control_exception(exc):
+            raise
+        st.error("Bagian 📚 Panduan mengalami kendala, tetapi aplikasi tetap berjalan.")
+        st.exception(exc)
+
+elif active_section == '🗂️ Data':
     try:
         st.subheader("🗂️ Data Management")
         c1, c2, c3, c4 = st.columns(4)
@@ -2641,7 +3057,7 @@ elif active_section == '🧙 Smart Assistant':
 
         mode = st.radio(
             "Pilih alat bantu",
-            ["Wizard Uji Otomatis", "Data Repair Assistant", "Sample Size & Power", "Kalkulator Statistik", "Template Narasi Laporan"],
+            ["Wizard Uji Otomatis", "Research Design Planner", "Data Repair Assistant", "Sample Size & Power", "Kalkulator Statistik", "Effect Size & Asumsi", "Template Narasi Laporan"],
             horizontal=True,
             key="smart_assistant_mode",
         )
@@ -2704,6 +3120,31 @@ elif active_section == '🧙 Smart Assistant':
                 merged = pd.concat([rec, guide.rename(columns={"Checklist": "Uji/Analisis Disarankan", "Status": "Kondisi Data", "Apa yang perlu dilakukan": "Langkah Berikutnya"})], ignore_index=True, sort=False)
                 add_report("Rekomendasi Smart Wizard", merged, f"Tujuan: {objective}. Skor kesiapan data: {score_now}/100.")
                 st.success("Rekomendasi disimpan ke Output Viewer.")
+
+        elif mode == "Research Design Planner":
+            st.markdown("### 🧭 Research Design Planner")
+            st.caption("Bantu merapikan desain riset sebelum analisis: pertanyaan riset, desain data, variabel, sampel, asumsi, dan laporan.")
+            rd1, rd2 = st.columns(2)
+            with rd1:
+                design = st.selectbox(
+                    "Desain penelitian/data",
+                    ["Survei/cross-sectional", "Eksperimen dua kelompok", "Pretest-posttest", "Korelasi/regresi", "Kuesioner/skala", "Data kategori", "Longitudinal/time series sederhana"],
+                    key="research_design_type",
+                )
+            with rd2:
+                objective_plan = st.selectbox(
+                    "Tujuan utama",
+                    ["Deskriptif", "Membandingkan kelompok", "Melihat hubungan", "Memprediksi hasil", "Menguji instrumen", "Mencari faktor/dimensi"],
+                    key="research_design_objective",
+                )
+            context_note = st.text_area("Konteks sampel/populasi", placeholder="Contoh: 120 mahasiswa semester 3, data dikumpulkan melalui kuesioner Likert.", key="research_design_context")
+            plan_df = research_design_planner_table(design, objective_plan, context_note)
+            st.dataframe(plan_df, use_container_width=True, hide_index=True)
+            st.markdown("#### Variabel yang tampaknya cocok dari dataset")
+            st.dataframe(variable_role_suggestions(df), use_container_width=True, hide_index=True)
+            if st.button("💾 Simpan rencana desain riset", key="save_research_design_plan"):
+                add_report("Research Design Planner", plan_df, f"Desain: {design}. Tujuan: {objective_plan}.")
+                st.success("Rencana desain riset disimpan ke Output Viewer.")
 
         elif mode == "Data Repair Assistant":
             st.markdown("### 🛠️ Data Repair Assistant")
@@ -2815,6 +3256,22 @@ elif active_section == '🧙 Smart Assistant':
                 pct = stats.norm.cdf(z) * 100
                 z_table = pd.DataFrame([{"X": raw_x, "Mean": mean_x, "SD": sd_x, "Z-score": z, "T-score": t_score, "Persentil approx": pct}])
                 st.dataframe(z_table, use_container_width=True, hide_index=True)
+
+        elif mode == "Effect Size & Asumsi":
+            st.markdown("### 📐 Effect Size & Asumsi")
+            st.caption("Panduan ringkas untuk memastikan hasil tidak hanya signifikan, tetapi juga bermakna dan layak dilaporkan.")
+            sub_mode = st.radio("Pilih panduan", ["Effect Size", "Asumsi & Solusi", "Pohon Keputusan Uji"], horizontal=True, key="effect_assumption_submode")
+            if sub_mode == "Effect Size":
+                st.dataframe(effect_size_reference_table(), use_container_width=True, hide_index=True)
+                st.info("Gunakan effect size untuk menjawab besar dampak. p-value menjawab ada/tidaknya bukti statistik; effect size menjawab seberapa berarti temuannya.")
+            elif sub_mode == "Asumsi & Solusi":
+                st.dataframe(assumption_playbook_table(), use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(analysis_decision_matrix(df), use_container_width=True, hide_index=True)
+            if st.button("💾 Simpan panduan effect/asumsi", key="save_effect_assumption_guide"):
+                table = effect_size_reference_table() if sub_mode == "Effect Size" else assumption_playbook_table() if sub_mode == "Asumsi & Solusi" else analysis_decision_matrix(df)
+                add_report(f"Panduan {sub_mode}", table, "Panduan interpretasi dan pemilihan analisis statistik.")
+                st.success("Panduan disimpan ke Output Viewer.")
 
         else:
             st.markdown("### 📝 Template Narasi Laporan")
@@ -3711,4 +4168,4 @@ with st.expander("📖 Catatan Metodologis"):
     )
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.9 · Smart Statistical Assistant Workflow</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v4.0 · Comprehensive Guided Statistics Suite</p>", unsafe_allow_html=True)
