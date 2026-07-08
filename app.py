@@ -1228,10 +1228,99 @@ def sample_dataframe():
     )
 
 
+
+def interpret_skewness_value(value):
+    """Interpretasi ringkas kemencengan distribusi untuk user awam."""
+    if pd.isna(value):
+        return "Tidak cukup data"
+    av = abs(float(value))
+    direction = "ke kanan/positif" if value > 0 else "ke kiri/negatif" if value < 0 else "simetris"
+    if av < 0.5:
+        level = "hampir simetris"
+    elif av < 1:
+        level = "sedikit menceng"
+    elif av < 2:
+        level = "cukup menceng"
+    else:
+        level = "sangat menceng"
+    if value == 0:
+        return "Distribusi sangat simetris"
+    return f"{level}; arah {direction}"
+
+
+def interpret_kurtosis_value(value):
+    """Interpretasi excess kurtosis. Normal biasanya mendekati 0."""
+    if pd.isna(value):
+        return "Tidak cukup data"
+    av = abs(float(value))
+    if av < 0.5:
+        return "Keruncingan/ekor mirip normal"
+    if value > 0:
+        if value < 2:
+            return "Lebih runcing/ekor agak berat; cek outlier ringan"
+        return "Ekor berat/nilai ekstrem kuat; cek outlier dan robust/nonparametrik"
+    if value > -2:
+        return "Lebih datar dari normal; data relatif menyebar"
+    return "Sangat datar/menyebar; cek skala dan pola kategori"
+
+
+def distribution_shape_recommendation(skewness, kurtosis):
+    """Saran praktis berdasarkan skewness dan kurtosis."""
+    if pd.isna(skewness) or pd.isna(kurtosis):
+        return "Tambah data atau pilih variabel dengan minimal data numerik yang cukup."
+    a_skew, a_kurt = abs(float(skewness)), abs(float(kurtosis))
+    if a_skew <= 1 and a_kurt <= 1:
+        return "Distribusi relatif aman secara deskriptif; lanjut cek normalitas formal/Q-Q plot bila akan memakai uji parametrik."
+    if a_skew <= 2 and a_kurt <= 2:
+        return "Masih dapat diterima pada banyak riset, tetapi cek histogram, boxplot, dan Q-Q plot sebelum menyimpulkan."
+    return "Distribusi jauh dari normal; cek outlier/input data, pertimbangkan transformasi, uji nonparametrik, bootstrap, atau metode robust."
+
+
+def normality_action_recommendation(p, n=None, alpha=0.05, variable="variabel"):
+    """Memberi tindakan praktis saat normalitas terpenuhi/tidak terpenuhi."""
+    if pd.isna(p):
+        return "Normalitas belum dapat dinilai. Tambah data numerik atau cek missing value."
+    if p >= alpha:
+        return "Normalitas tidak bermasalah secara formal. Lanjutkan analisis parametrik bila asumsi lain juga terpenuhi."
+    small_n = n is not None and n < 30
+    if small_n:
+        return "Normalitas tidak terpenuhi dan N kecil. Cek outlier/Q-Q plot; pertimbangkan transformasi data atau gunakan uji nonparametrik."
+    return "Normalitas tidak terpenuhi. Jika N besar, uji parametrik kadang tetap cukup robust, tetapi tetap cek grafik, outlier, effect size/CI, atau gunakan bootstrap/robust/nonparametrik."
+
+
+def normality_solution_table():
+    """Panduan tindakan ketika uji normalitas tidak terpenuhi."""
+    return pd.DataFrame([
+        {"Kondisi data/tujuan": "Ada salah input atau outlier ekstrem", "Yang sebaiknya dilakukan": "Cek data mentah, boxplot, z-score/IQR; koreksi jika salah input", "Catatan untuk user awam": "Jangan langsung hapus outlier. Pastikan dulu apakah itu kesalahan input atau data nyata."},
+        {"Kondisi data/tujuan": "Data menceng kanan, misalnya pendapatan/waktu", "Yang sebaiknya dilakukan": "Coba transformasi log, sqrt, atau Box-Cox/Yeo-Johnson", "Catatan untuk user awam": "Transformasi mengubah skala, jadi interpretasi hasil harus disesuaikan."},
+        {"Kondisi data/tujuan": "Membandingkan 2 kelompok independen", "Yang sebaiknya dilakukan": "Gunakan Welch t-test jika varians tidak homogen; gunakan Mann-Whitney jika distribusi sangat tidak normal/ordinal", "Catatan untuk user awam": "Mann-Whitney membandingkan peringkat/distribusi, bukan selalu rata-rata."},
+        {"Kondisi data/tujuan": "Membandingkan pre-post/berpasangan", "Yang sebaiknya dilakukan": "Gunakan Wilcoxon Signed-Rank atau bootstrap CI untuk selisih", "Catatan untuk user awam": "Yang perlu dicek normalitasnya adalah selisih pre-post, bukan masing-masing kolom saja."},
+        {"Kondisi data/tujuan": "Membandingkan 3+ kelompok", "Yang sebaiknya dilakukan": "Gunakan Welch ANOVA/Games-Howell atau Kruskal-Wallis + Dunn post-hoc", "Catatan untuk user awam": "Jika hasil signifikan, lanjut post-hoc untuk tahu kelompok mana yang berbeda."},
+        {"Kondisi data/tujuan": "Korelasi antar variabel", "Yang sebaiknya dilakukan": "Gunakan Spearman/Kendall jika data tidak normal, ordinal, atau ada outlier", "Catatan untuk user awam": "Spearman cocok untuk hubungan yang meningkat/menurun tetapi tidak harus linear."},
+        {"Kondisi data/tujuan": "Regresi", "Yang sebaiknya dilakukan": "Cek normalitas residual, bukan hanya Y; gunakan robust standard errors/transformasi/bootstrapping bila perlu", "Catatan untuk user awam": "Regresi lebih peduli pola residual daripada bentuk data mentah."},
+        {"Kondisi data/tujuan": "Sampel besar", "Yang sebaiknya dilakukan": "Jangan hanya bergantung pada p normalitas; lihat Q-Q plot, skewness/kurtosis, residual, dan effect size", "Catatan untuk user awam": "Pada N besar, uji normalitas sangat sensitif dan mudah signifikan."},
+        {"Kondisi data/tujuan": "Laporan riset", "Yang sebaiknya dilakukan": "Laporkan hasil uji, grafik, keputusan metode, effect size, dan alasan memilih alternatif", "Catatan untuk user awam": "Tulis keputusan metodologis secara transparan agar pembaca paham alasan analisis."},
+    ])
+
+
+def skewness_kurtosis_reference_table():
+    return pd.DataFrame([
+        {"Indikator": "Skewness", "Nilai": "-0.5 s.d. +0.5", "Makna": "Distribusi hampir simetris", "Tindakan": "Biasanya aman; tetap cek grafik bila analisis inferensial."},
+        {"Indikator": "Skewness", "Nilai": "+0.5 s.d. +1 atau -1 s.d. -0.5", "Makna": "Sedikit menceng", "Tindakan": "Cek histogram/Q-Q plot; lanjut hati-hati."},
+        {"Indikator": "Skewness", "Nilai": "+1 s.d. +2 atau -2 s.d. -1", "Makna": "Cukup menceng", "Tindakan": "Cek outlier dan pertimbangkan transformasi/alternatif nonparametrik."},
+        {"Indikator": "Skewness", "Nilai": "> +2 atau < -2", "Makna": "Sangat menceng", "Tindakan": "Jangan langsung pakai uji parametrik; evaluasi outlier, transformasi, robust/nonparametrik."},
+        {"Indikator": "Kurtosis", "Nilai": "Mendekati 0", "Makna": "Keruncingan/ekor mirip normal", "Tindakan": "Cukup baik secara deskriptif."},
+        {"Indikator": "Kurtosis", "Nilai": "> 0", "Makna": "Ekor lebih berat/lebih banyak nilai ekstrem", "Tindakan": "Cek outlier, boxplot, dan sensitivitas hasil."},
+        {"Indikator": "Kurtosis", "Nilai": "< 0", "Makna": "Distribusi lebih datar/menyebar", "Tindakan": "Cek apakah variabel berskala kategori/ordinal atau rentang nilai terbatas."},
+        {"Indikator": "Patokan praktis", "Nilai": "-2 s.d. +2", "Makna": "Sering masih diterima pada banyak riset terapan", "Tindakan": "Tetap kombinasikan dengan Shapiro/Q-Q plot dan konteks penelitian."},
+    ])
+
 def descriptive_table(df, cols):
     rows = []
     for col in cols:
         s = safe_numeric(df[col]).dropna()
+        skew = stats.skew(s, nan_policy="omit") if len(s) > 2 else np.nan
+        kurt = stats.kurtosis(s, nan_policy="omit") if len(s) > 3 else np.nan
         rows.append(
             {
                 "Variabel": col,
@@ -1242,11 +1331,17 @@ def descriptive_table(df, cols):
                 "Std. Dev": s.std(ddof=1) if len(s) > 1 else np.nan,
                 "Min": s.min() if len(s) else np.nan,
                 "Max": s.max() if len(s) else np.nan,
-                "Skewness": stats.skew(s, nan_policy="omit") if len(s) > 2 else np.nan,
-                "Kurtosis": stats.kurtosis(s, nan_policy="omit") if len(s) > 3 else np.nan,
+                "Skewness": skew,
+                "Makna Skewness": interpret_skewness_value(skew),
+                "Kurtosis": kurt,
+                "Makna Kurtosis": interpret_kurtosis_value(kurt),
+                "Saran Distribusi": distribution_shape_recommendation(skew, kurt),
             }
         )
-    return pd.DataFrame(rows).round(4)
+    out = pd.DataFrame(rows)
+    num = out.select_dtypes(include=[np.number]).columns
+    out[num] = out[num].round(4)
+    return out
 
 
 def frequency_table(df, col):
@@ -1255,7 +1350,9 @@ def frequency_table(df, col):
     return pd.DataFrame({"Kategori": vc.index.astype(str), "Frekuensi": vc.values, "Persen": pct.values.round(2)})
 
 
-def normality_table(df, cols):
+def normality_table(df, cols, alpha=None):
+    if alpha is None:
+        alpha = st.session_state.get("active_alpha", 0.05)
     rows = []
     for col in cols:
         s = safe_numeric(df[col]).dropna()
@@ -1268,8 +1365,19 @@ def normality_table(df, cols):
         else:
             stat, p = stats.normaltest(s)
             test = "D'Agostino K²"
-        rows.append({"Variabel": col, "N": len(s), "Uji": test, "Statistic": stat, "p-value": p})
-    return pd.DataFrame(rows).round(5)
+        rows.append({
+            "Variabel": col,
+            "N": len(s),
+            "Uji": test,
+            "Statistic": stat,
+            "p-value": p,
+            "Keputusan": "Normalitas OK" if (not pd.isna(p) and p >= alpha) else "Tidak normal/perlu cek" if not pd.isna(p) else "Belum dapat dinilai",
+            "Apa yang sebaiknya dilakukan": normality_action_recommendation(p, len(s), alpha, col),
+        })
+    out = pd.DataFrame(rows)
+    num = out.select_dtypes(include=[np.number]).columns
+    out[num] = out[num].round(5)
+    return out
 
 
 def one_sample_ttest(s, mu, alpha):
@@ -2680,7 +2788,8 @@ def research_design_planner_table(design, objective, sample_context):
 
 def assumption_playbook_table():
     return pd.DataFrame([
-        {"Asumsi/masalah": "Normalitas", "Kapan dicek": "T-test/ANOVA/regresi terutama N kecil", "Cara cek": "Shapiro-Wilk, Q-Q plot, histogram residual", "Jika bermasalah": "Gunakan transformasi, uji nonparametrik, bootstrap/robust, atau laporkan keterbatasan"},
+        {"Asumsi/masalah": "Normalitas", "Kapan dicek": "T-test/ANOVA terutama N kecil; regresi cek residual", "Cara cek": "Shapiro-Wilk/D'Agostino, skewness, kurtosis, histogram, Q-Q plot", "Jika bermasalah": "Cek outlier/input, transformasi, pilih uji nonparametrik, bootstrap/robust, atau laporkan keterbatasan"},
+        {"Asumsi/masalah": "Skewness & kurtosis ekstrem", "Kapan dicek": "Saat deskriptif dan sebelum uji parametrik", "Cara cek": "Skewness jauh dari 0; kurtosis jauh dari 0; lihat histogram/boxplot", "Jika bermasalah": "Gunakan median/IQR, cek outlier, transformasi, Spearman/Mann-Whitney/Wilcoxon/Kruskal sesuai tujuan"},
         {"Asumsi/masalah": "Homogenitas varians", "Kapan dicek": "T-test independen/ANOVA", "Cara cek": "Levene test", "Jika bermasalah": "Welch t-test/ANOVA atau nonparametrik"},
         {"Asumsi/masalah": "Outlier", "Kapan dicek": "Semua analisis numerik", "Cara cek": "Boxplot, z-score, IQR, Cook's distance", "Jika bermasalah": "Verifikasi input, winsorize dengan alasan, analisis sensitif"},
         {"Asumsi/masalah": "Linearitas", "Kapan dicek": "Korelasi/regresi", "Cara cek": "Scatter plot, residual plot", "Jika bermasalah": "Transformasi, model non-linear, Spearman"},
@@ -2776,7 +2885,7 @@ def render_reference_center(df):
     st.caption("Bagian ini menyimpan detail agar UI utama tetap bersih. Cocok untuk belajar, mengecek asumsi, dan menyiapkan laporan.")
     guide_mode = st.radio(
         "Pilih panduan",
-        ["Pohon Keputusan Uji", "Asumsi & Solusi", "Effect Size", "Format Data", "Glosarium", "Checklist Laporan"],
+        ["Pohon Keputusan Uji", "Asumsi & Solusi", "Normalitas & Distribusi", "Effect Size", "Format Data", "Glosarium", "Checklist Laporan"],
         horizontal=True,
         key="reference_center_mode",
     )
@@ -2784,6 +2893,12 @@ def render_reference_center(df):
         st.dataframe(analysis_decision_matrix(df), use_container_width=True, hide_index=True)
     elif guide_mode == "Asumsi & Solusi":
         st.dataframe(assumption_playbook_table(), use_container_width=True, hide_index=True)
+    elif guide_mode == "Normalitas & Distribusi":
+        st.markdown("#### Skewness & Kurtosis")
+        st.dataframe(skewness_kurtosis_reference_table(), use_container_width=True, hide_index=True)
+        st.markdown("#### Jika uji normalitas tidak tercapai")
+        st.dataframe(normality_solution_table(), use_container_width=True, hide_index=True)
+        st.info("Gunakan keputusan gabungan: p-value normalitas, Q-Q plot/histogram, skewness-kurtosis, ukuran sampel, dan tujuan analisis. Jangan hanya memakai satu angka.")
     elif guide_mode == "Effect Size":
         st.dataframe(effect_size_reference_table(), use_container_width=True, hide_index=True)
         st.info("Baca effect size bersama konteks riset. Nilai kecil tetap bisa penting jika dampaknya luas; nilai besar perlu tetap dicek validitas datanya.")
@@ -3373,16 +3488,21 @@ elif active_section == '🧙 Smart Assistant':
         elif mode == "Effect Size & Asumsi":
             st.markdown("### 📐 Effect Size & Asumsi")
             st.caption("Panduan ringkas untuk memastikan hasil tidak hanya signifikan, tetapi juga bermakna dan layak dilaporkan.")
-            sub_mode = st.radio("Pilih panduan", ["Effect Size", "Asumsi & Solusi", "Pohon Keputusan Uji"], horizontal=True, key="effect_assumption_submode")
+            sub_mode = st.radio("Pilih panduan", ["Effect Size", "Asumsi & Solusi", "Normalitas & Distribusi", "Pohon Keputusan Uji"], horizontal=True, key="effect_assumption_submode")
             if sub_mode == "Effect Size":
                 st.dataframe(effect_size_reference_table(), use_container_width=True, hide_index=True)
                 st.info("Gunakan effect size untuk menjawab besar dampak. p-value menjawab ada/tidaknya bukti statistik; effect size menjawab seberapa berarti temuannya.")
             elif sub_mode == "Asumsi & Solusi":
                 st.dataframe(assumption_playbook_table(), use_container_width=True, hide_index=True)
+            elif sub_mode == "Normalitas & Distribusi":
+                st.markdown("#### Makna skewness dan kurtosis")
+                st.dataframe(skewness_kurtosis_reference_table(), use_container_width=True, hide_index=True)
+                st.markdown("#### Tindakan jika normalitas tidak terpenuhi")
+                st.dataframe(normality_solution_table(), use_container_width=True, hide_index=True)
             else:
                 st.dataframe(analysis_decision_matrix(df), use_container_width=True, hide_index=True)
             if st.button("💾 Simpan panduan effect/asumsi", key="save_effect_assumption_guide"):
-                table = effect_size_reference_table() if sub_mode == "Effect Size" else assumption_playbook_table() if sub_mode == "Asumsi & Solusi" else analysis_decision_matrix(df)
+                table = effect_size_reference_table() if sub_mode == "Effect Size" else assumption_playbook_table() if sub_mode == "Asumsi & Solusi" else normality_solution_table() if sub_mode == "Normalitas & Distribusi" else analysis_decision_matrix(df)
                 add_report(f"Panduan {sub_mode}", table, "Panduan interpretasi dan pemilihan analisis statistik.")
                 st.success("Panduan disimpan ke Output Viewer.")
 
@@ -3566,8 +3686,11 @@ elif active_section == '📋 Deskriptif':
         else:
             desc_cols = st.multiselect("Variabel numerik", num_cols, default=num_cols[: min(6, len(num_cols))])
             if desc_cols and st.button("Hitung Deskriptif", type="primary"):
-                show_table("Statistik Deskriptif", descriptive_table(df, desc_cols))
-                show_table("Uji Normalitas", normality_table(df, desc_cols), "p-value < α mengindikasikan penyimpangan dari normalitas.")
+                show_table("Statistik Deskriptif + Makna Skewness/Kurtosis", descriptive_table(df, desc_cols))
+                show_table("Uji Normalitas + Rekomendasi Tindakan", normality_table(df, desc_cols), "p-value < α mengindikasikan penyimpangan dari normalitas. Baca kolom tindakan untuk memilih transformasi, uji alternatif, atau cek outlier.")
+                with st.expander("📌 Cara memaknai skewness, kurtosis, dan normalitas", expanded=detail_is_full()):
+                    st.dataframe(skewness_kurtosis_reference_table(), use_container_width=True, hide_index=True)
+                    st.dataframe(normality_solution_table(), use_container_width=True, hide_index=True)
 
             st.markdown("### Frekuensi Kategori")
             freq_col = st.selectbox("Pilih variabel", all_cols)
@@ -3818,7 +3941,9 @@ elif active_section == '🧪 Uji Statistik':
             group_for_levene = st.selectbox("Kolom grup untuk Levene", ["(tidak ada)"] + all_cols)
             if st.button("Jalankan Uji Asumsi", type="primary"):
                 if check_cols:
-                    show_table("Normality Tests", normality_table(df, check_cols), "Shapiro dipakai untuk N ≤ 5000; D'Agostino untuk N besar.")
+                    show_table("Normality Tests + Rekomendasi", normality_table(df, check_cols), "Shapiro dipakai untuk N ≤ 5000; D'Agostino untuk N besar. Jika p-value < α, jangan hanya berhenti; baca rekomendasi tindakan.")
+                    with st.expander("Apa yang dilakukan jika normalitas tidak tercapai?", expanded=True):
+                        st.dataframe(normality_solution_table(), use_container_width=True, hide_index=True)
                     out_rows = []
                     for col in check_cols:
                         s = safe_numeric(df[col])
