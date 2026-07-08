@@ -1,6 +1,8 @@
-# 📊 Statistik Pro+ v3.7 — Alternatif SPSS berbasis Streamlit
+# 📊 Statistik Pro+ v3.8 — Alternatif SPSS berbasis Streamlit
 
-Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
+Statistik Pro+ v3.8 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
+
+Versi ini menambahkan modul **Kompatibilitas Data** agar pengguna awam tidak hanya mendapat pesan error ketika data tidak cocok, tetapi juga mendapat diagnosis dan instruksi praktis: apa yang harus diubah, ditambahkan, diganti, atau dibersihkan sebelum analisis.
 
 ## ✨ Fitur Utama
 
@@ -16,7 +18,28 @@ Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang
   - value labels, contoh: `1=Laki-laki; 2=Perempuan`
   - user-missing values, contoh: `99, 999`
 
-### 2. Transformasi Data
+### 2. Kompatibilitas Data & Panduan Perbaikan
+- Skor kesiapan data 0–100
+- Diagnosis data tidak kompatibel:
+  - kolom kosong atau duplikat
+  - kolom angka yang terbaca sebagai teks
+  - missing value tinggi
+  - kode missing seperti `-`, `NA`, `99`
+  - variabel tanpa variasi
+  - kategori terlalu banyak atau grup terlalu kecil
+  - kolom ID yang sebaiknya tidak dipakai sebagai variabel analisis
+  - mismatch antara tipe data dan measurement level
+- Rekomendasi untuk pengguna awam:
+  - apa yang sebaiknya diubah
+  - apa yang sebaiknya ditambahkan
+  - apa yang sebaiknya diganti/dihapus
+  - langkah perbaikan yang bisa dilakukan di Transform/Variable View
+- Profil setiap kolom
+- Rekomendasi uji statistik yang cocok dengan dataset aktif
+- Checklist khusus sebelum t-test, ANOVA, korelasi, regresi, reliabilitas, dan EFA
+- Ekspor laporan kompatibilitas ke CSV dan Output Viewer
+
+### 3. Transformasi Data
 - Compute variable
 - Recode into different variable
 - Reverse coding item Likert
@@ -26,14 +49,14 @@ Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang
 - Rename dan drop variables
 - Syntax / audit trail sederhana
 
-### 3. Statistik Deskriptif
+### 4. Statistik Deskriptif
 - Mean, median, standar deviasi, min, max
 - Skewness dan kurtosis
 - Tabel frekuensi
 - Explore by group
 - Uji normalitas Shapiro-Wilk / D'Agostino
 
-### 4. Uji Statistik
+### 5. Uji Statistik
 - One-Sample T-Test
 - Independent T-Test, wide dan long format
 - Paired T-Test
@@ -48,7 +71,7 @@ Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang
 - Friedman Test
 - Uji asumsi: normalitas, Levene, outlier sederhana
 
-### 5. Regresi
+### 6. Regresi
 - Regresi linear berganda
 - Regresi logistik biner
 - Koefisien, CI, p-value, odds ratio
@@ -58,7 +81,7 @@ Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang
   - Durbin-Watson
   - Breusch-Pagan
 
-### 6. Reliabilitas, PCA, dan Faktor
+### 7. Reliabilitas, PCA, dan Faktor
 - Cronbach’s Alpha
 - Corrected item-total correlation
 - Alpha if item deleted
@@ -69,7 +92,7 @@ Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang
 - KMO dan Bartlett’s Test
 - Factor loadings, communalities, eigenvalues, variance explained
 
-### 7. Visualisasi
+### 8. Visualisasi
 - Histogram
 - Box plot
 - Scatter plot + trendline OLS
@@ -77,14 +100,14 @@ Statistik Pro+ v3.7 adalah aplikasi statistik interaktif berbasis Streamlit yang
 - Correlation heatmap
 - Q-Q plot
 
-### 8. Insight & Makna Riset
+### 9. Insight & Makna Riset
 - Tab **Insight Riset** untuk mengubah output statistik menjadi narasi pembahasan
 - Sintesis temuan utama dari output tersimpan
 - Insight per output: makna statistik, effect size, kualitas instrumen, kelayakan faktor, dan saran pelaporan
 - Template narasi pembahasan yang bisa diunduh sebagai Markdown
 - Penyimpanan sintesis insight ke Output Viewer
 
-### 9. Output Viewer & Ekspor
+### 10. Output Viewer & Ekspor
 - Output analisis tersimpan seperti Output Viewer sederhana
 - Interpretasi otomatis berbasis p-value/effect/model summary
 - Ekspor:
@@ -105,18 +128,27 @@ streamlit run app.py
 ## 📁 File dalam paket
 
 ```text
-statistik_pro_spss_v3_6/
+statistik_pro_spss_v3_8/
 ├── app.py
 ├── requirements.txt
 ├── README.md
-├── sample_data.csv
-└── .streamlit/
-    └── config.toml
+└── sample_data.csv
 ```
 
 ## 🧪 Data Contoh
 
-Aplikasi menyertakan `sample_data.csv` dan juga tombol **Data Contoh** di sidebar. Data contoh berisi variabel kelompok, gender, kecemasan, motivasi, nilai akhir, status lulus, dan item kuesioner Likert.
+Aplikasi menyertakan `sample_data.csv` dan tombol **Data Contoh** di sidebar. Data contoh berisi variabel kelompok, gender, kecemasan, motivasi, nilai akhir, status lulus, dan item kuesioner Likert.
+
+## Alur yang Disarankan untuk Pengguna Awam
+
+1. Upload data atau gunakan Data Contoh.
+2. Buka **Kompatibilitas Data**.
+3. Ikuti daftar prioritas: perbaiki yang **Kritis** dan **Tinggi** dulu.
+4. Cek **Variable View** agar Measure/Role sesuai.
+5. Jalankan statistik deskriptif.
+6. Pilih uji statistik yang direkomendasikan aplikasi.
+7. Setelah output keluar, buka **Insight Riset** untuk membaca maknanya.
+8. Ekspor output ke Excel/Word/HTML/Markdown.
 
 ## ⚠️ Catatan Metodologis
 
@@ -126,24 +158,4 @@ Untuk laporan akademik, sebaiknya selalu laporkan statistik uji, derajat kebebas
 
 ---
 
-Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.7
-
-
-## Catatan Versi 3.2
-
-- Memperbaiki kompatibilitas EFA pada scikit-learn versi terbaru yang mengganti parameter `force_all_finite` menjadi `ensure_all_finite`.
-- EFA sekarang dipatch otomatis dari dalam aplikasi, sehingga tidak perlu downgrade scikit-learn.
-
-
-## Catatan v3.4
-
-- EFA kini memiliki **engine fallback stabil** tanpa `factor-analyzer`.
-- Jika terjadi konflik `force_all_finite` / `ensure_all_finite` pada scikit-learn terbaru, pilih menu **Engine EFA → Fallback stabil tanpa factor-analyzer**.
-- Aplikasi tetap mencoba `factor-analyzer` terlebih dahulu pada mode otomatis, lalu berpindah ke fallback bila dependency bermasalah.
-
-
-## Catatan v3.7
-
-- Menambahkan modul **Insight & Makna Riset**.
-- Aplikasi kini tidak hanya menampilkan angka statistik, tetapi juga membantu menyusun makna riset: temuan utama, hasil non-signifikan, asumsi, kualitas pengukuran, dan rekomendasi analisis lanjutan.
-- Insight dapat disimpan ke Output Viewer dan diekspor bersama laporan.
+Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.8 · Compatibility & Beginner Guidance Workflow

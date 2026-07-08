@@ -1434,6 +1434,462 @@ def make_design_matrix(df, predictors):
     return X
 
 
+
+# -----------------------------------------------------------------------------
+# Data compatibility assistant for beginner users
+# -----------------------------------------------------------------------------
+def _sev_rank(severity):
+    order = {"Kritis": 0, "Tinggi": 1, "Sedang": 2, "Ringan": 3, "Info": 4, "OK": 5}
+    return order.get(str(severity), 9)
+
+
+def _issue(severity, area, problem, columns, why, fix, easy_action, status=None):
+    return {
+        "Status": status or ("✅ Siap" if severity == "OK" else "⚠️ Perlu dicek"),
+        "Prioritas": severity,
+        "Area": area,
+        "Masalah/Tanda": problem,
+        "Kolom Terdampak": ", ".join(map(str, columns)) if isinstance(columns, (list, tuple, set)) else str(columns),
+        "Mengapa Penting": why,
+        "Sebaiknya Diubah/Ditambahkan/Diganti": fix,
+        "Langkah Mudah untuk User Awam": easy_action,
+    }
+
+
+def _is_numeric_like(series, threshold=0.80):
+    s = series.dropna()
+    if s.empty or pd.api.types.is_numeric_dtype(series):
+        return False, 0.0
+    cleaned = s.astype(str).str.strip()
+    cleaned = cleaned.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    cleaned = cleaned.str.replace(r"[^0-9\-\.]+", "", regex=True)
+    converted = pd.to_numeric(cleaned.replace("", np.nan), errors="coerce")
+    ratio = float(converted.notna().mean()) if len(converted) else 0.0
+    return ratio >= threshold, ratio
+
+
+def _is_date_like(series, threshold=0.80):
+    s = series.dropna()
+    if s.empty or pd.api.types.is_datetime64_any_dtype(series):
+        return False, 0.0
+    if pd.api.types.is_numeric_dtype(series):
+        return False, 0.0
+    parsed = pd.to_datetime(s.astype(str), errors="coerce", dayfirst=True)
+    ratio = float(parsed.notna().mean()) if len(parsed) else 0.0
+    return ratio >= threshold, ratio
+
+
+def _column_profile(df, metadata=None):
+    rows = []
+    meta_map = {}
+    if metadata is not None and isinstance(metadata, pd.DataFrame) and "Name" in metadata.columns:
+        try:
+            meta_map = metadata.set_index("Name").to_dict("index")
+        except Exception:
+            meta_map = {}
+    for col in df.columns:
+        s = df[col]
+        miss = int(s.isna().sum())
+        nonmiss = int(s.notna().sum())
+        unique = int(s.nunique(dropna=True))
+        numeric_like, numeric_ratio = _is_numeric_like(s)
+        date_like, date_ratio = _is_date_like(s)
+        measure = meta_map.get(col, {}).get("Measure", infer_measure(s))
+        role = meta_map.get(col, {}).get("Role", "Input")
+        rows.append({
+            "Kolom": col,
+            "Tipe terbaca": str(s.dtype),
+            "Measure": measure,
+            "Role": role,
+            "Non-missing": nonmiss,
+            "Missing": miss,
+            "% Missing": round((miss / max(len(df), 1)) * 100, 2),
+            "Nilai unik": unique,
+            "Contoh nilai": ", ".join(map(str, s.dropna().astype(str).head(3).tolist())) if nonmiss else "-",
+            "Terlihat numerik?": "Ya" if numeric_like else "Tidak",
+            "Terlihat tanggal?": "Ya" if date_like else "Tidak",
+            "Catatan singkat": _quick_column_note(s, measure, numeric_like, date_like, unique, len(df)),
+        })
+    return pd.DataFrame(rows)
+
+
+def _quick_column_note(series, measure, numeric_like, date_like, unique, n_rows):
+    if series.isna().all():
+        return "Kosong; perlu diisi atau dihapus."
+    if numeric_like:
+        return "Seharusnya angka; ubah menjadi numeric sebelum analisis."
+    if date_like:
+        return "Sepertinya tanggal; ubah menjadi date/datetime bila dipakai sebagai waktu."
+    if unique <= 1:
+        return "Variasi terlalu rendah; biasanya tidak berguna untuk uji statistik."
+    if unique == n_rows and n_rows > 10:
+        return "Kemungkinan ID/kode unik; jangan dipakai sebagai grup/prediktor utama tanpa alasan."
+    if pd.api.types.is_numeric_dtype(series) and str(measure).lower() in ["nominal", "ordinal"] and unique > 15:
+        return "Tipe metadata mungkin perlu diubah ke Scale bila ini skor/ukuran kontinu."
+    return "Cukup aman."
+
+
+def analyze_data_compatibility(df, metadata=None):
+    issues = []
+    n_rows, n_cols = df.shape
+    num = numeric_cols(df)
+    cat = categorical_cols(df)
+
+    if n_rows == 0 or n_cols == 0:
+        issues.append(_issue(
+            "Kritis", "Struktur data", "Dataset kosong", "Semua data",
+            "Analisis tidak dapat dilakukan tanpa baris dan kolom.",
+            "Tambahkan data mentah dengan minimal satu variabel dan beberapa observasi.",
+            "Upload ulang file yang benar atau gunakan Data Contoh untuk mencoba alur aplikasi.",
+        ))
+        return pd.DataFrame(issues)
+
+    if n_rows < 5:
+        issues.append(_issue(
+            "Tinggi", "Ukuran sampel", f"Jumlah baris sangat kecil: {n_rows}", "Semua analisis inferensial",
+            "Sebagian besar uji statistik membutuhkan sampel memadai agar hasil stabil.",
+            "Tambahkan responden/observasi. Untuk latihan boleh lanjut, tetapi jangan jadikan hasil sebagai kesimpulan riset final.",
+            "Isi minimal 20-30 baris untuk analisis sederhana; EFA/regresi biasanya perlu lebih banyak.",
+        ))
+    elif n_rows < 30:
+        issues.append(_issue(
+            "Sedang", "Ukuran sampel", f"Jumlah baris masih terbatas: {n_rows}", "Semua analisis inferensial",
+            "Sampel kecil membuat p-value dan estimasi efek kurang stabil.",
+            "Laporkan keterbatasan ukuran sampel dan prioritaskan effect size serta uji nonparametrik bila asumsi tidak terpenuhi.",
+            "Jika memungkinkan, tambahkan data sampai minimal 30 baris untuk analisis dasar.",
+        ))
+
+    duplicated = df.columns[df.columns.duplicated()].tolist()
+    if duplicated:
+        issues.append(_issue(
+            "Kritis", "Nama kolom", "Ada nama kolom ganda", duplicated,
+            "Aplikasi dan rumus analisis dapat salah memilih kolom jika namanya sama.",
+            "Ganti nama kolom agar unik, misalnya pre_test dan post_test.",
+            "Buka Transform → Rename/Drop Variables, lalu ubah nama kolom yang duplikat.",
+        ))
+
+    unnamed = [c for c in df.columns if str(c).strip() == "" or str(c).lower().startswith("unnamed")]
+    if unnamed:
+        issues.append(_issue(
+            "Sedang", "Nama kolom", "Ada kolom tanpa nama jelas", unnamed,
+            "Pengguna awam sulit memilih variabel jika nama kolom tidak bermakna.",
+            "Ganti nama menjadi deskriptif, misalnya jenis_kelamin, usia, skor_total.",
+            "Buka Transform → Rename/Drop Variables, lalu beri nama yang pendek tanpa spasi.",
+        ))
+
+    if not num:
+        maybe_num = []
+        for col in df.columns:
+            is_like, ratio = _is_numeric_like(df[col])
+            if is_like:
+                maybe_num.append(col)
+        issues.append(_issue(
+            "Tinggi", "Tipe data", "Tidak ada kolom numerik yang terbaca", maybe_num or "-",
+            "T-test, ANOVA, korelasi, regresi, reliabilitas, PCA, dan EFA membutuhkan angka.",
+            "Ubah kolom skor/nilai menjadi numeric. Bersihkan simbol %, Rp, spasi, atau koma desimal yang salah.",
+            "Cek kolom yang terlihat seperti angka, lalu gunakan Transform → Compute Variable atau bersihkan file CSV/Excel.",
+        ))
+    else:
+        issues.append(_issue(
+            "OK", "Tipe data", f"Ada {len(num)} kolom numerik", num[:8],
+            "Analisis berbasis skor dapat dilakukan pada kolom numerik.",
+            "Pastikan kolom numerik benar-benar skor/ukuran, bukan kode kategori seperti 1=Laki-laki.",
+            "Gunakan Variable View untuk menandai Scale/Nominal/Ordinal.",
+        ))
+
+    numeric_like_cols = []
+    date_like_cols = []
+    for col in df.columns:
+        is_num_like, ratio = _is_numeric_like(df[col])
+        if is_num_like:
+            numeric_like_cols.append(f"{col} ({ratio*100:.0f}% terlihat angka)")
+        is_date_like, dratio = _is_date_like(df[col])
+        if is_date_like:
+            date_like_cols.append(f"{col} ({dratio*100:.0f}% terlihat tanggal)")
+    if numeric_like_cols:
+        issues.append(_issue(
+            "Tinggi", "Konversi angka", "Kolom terlihat numerik tetapi terbaca teks", numeric_like_cols,
+            "Kolom seperti ini tidak muncul di daftar variabel numerik sehingga analisis bisa tidak tersedia.",
+            "Konversi menjadi angka; samakan tanda desimal, hapus satuan/simbol mata uang, dan pastikan missing value kosong/NA.",
+            "Saat upload CSV, coba ubah 'Tanda desimal' menjadi koma atau titik. Jika masih gagal, bersihkan di Excel lalu upload ulang.",
+        ))
+    if date_like_cols:
+        issues.append(_issue(
+            "Info", "Tanggal/waktu", "Kolom terlihat seperti tanggal", date_like_cols,
+            "Tanggal tidak boleh diperlakukan sebagai angka biasa kecuali sudah diubah menjadi durasi/umur/periode.",
+            "Ubah tanggal menjadi variabel yang bermakna, misalnya usia_hari, bulan, semester, atau before/after.",
+            "Untuk analisis sederhana, buat kolom baru di Excel: umur, lama_kerja, bulan_pengamatan, atau kategori periode.",
+        ))
+
+    placeholder_tokens = ["-", "--", "?", "NA", "N/A", "null", "None", "missing", "tidak ada"]
+    placeholder_cols = []
+    for col in df.columns:
+        if df[col].dtype == object:
+            vals = df[col].astype(str).str.strip()
+            count = int(vals.isin(placeholder_tokens).sum())
+            if count:
+                placeholder_cols.append(f"{col} ({count} nilai)")
+    if placeholder_cols:
+        issues.append(_issue(
+            "Sedang", "Missing value", "Ada kode missing yang masih terbaca sebagai teks", placeholder_cols,
+            "Kode seperti '-' atau 'NA' bisa dianggap kategori valid sehingga frekuensi/crosstab bias.",
+            "Ubah kode tersebut menjadi kosong/NaN atau daftarkan sebagai Missing Values di Variable View.",
+            "Buka Variable View → isi Missing Values, misalnya `-, NA, 99`, atau bersihkan file sebelum upload.",
+        ))
+
+    missing_high = []
+    missing_any = []
+    for col in df.columns:
+        pct = df[col].isna().mean() * 100
+        if pct >= 40:
+            missing_high.append(f"{col} ({pct:.1f}%)")
+        elif pct > 0:
+            missing_any.append(f"{col} ({pct:.1f}%)")
+    if missing_high:
+        issues.append(_issue(
+            "Tinggi", "Missing value", "Missing value sangat tinggi", missing_high,
+            "Kolom dengan banyak data kosong dapat melemahkan analisis dan membuat hasil tidak representatif.",
+            "Pertimbangkan hapus kolom, imputasi, atau kumpulkan data ulang tergantung konteks riset.",
+            "Untuk pemula: jika missing >40%, jangan jadikan variabel utama kecuali ada alasan metodologis kuat.",
+        ))
+    if missing_any:
+        issues.append(_issue(
+            "Ringan", "Missing value", "Ada beberapa data kosong", missing_any[:10],
+            "Sebagian analisis akan otomatis membuang baris kosong sehingga N bisa berbeda antar output.",
+            "Tentukan strategi: listwise deletion, pairwise deletion, imputasi mean/median, atau kategori 'Tidak menjawab'.",
+            "Laporkan jumlah missing di bagian metode/hasil, lalu cek N pada setiap output.",
+        ))
+
+    constant_cols = [c for c in df.columns if df[c].nunique(dropna=True) <= 1]
+    if constant_cols:
+        issues.append(_issue(
+            "Tinggi", "Variasi data", "Ada kolom tanpa variasi", constant_cols,
+            "Kolom konstan tidak bisa menjelaskan perbedaan/hubungan karena nilainya sama semua.",
+            "Hapus dari analisis atau cek apakah data salah input.",
+            "Gunakan Transform → Drop Variables bila memang kolom tidak diperlukan.",
+        ))
+
+    id_like = [c for c in df.columns if df[c].nunique(dropna=True) == len(df) and len(df) >= 10]
+    if id_like:
+        issues.append(_issue(
+            "Info", "ID/kode unik", "Kolom tampak seperti ID unik", id_like[:8],
+            "ID unik biasanya tidak cocok sebagai grup, prediktor kategorik, atau item reliabilitas.",
+            "Tandai sebagai Role=None atau gunakan hanya untuk pelacakan responden.",
+            "Di Variable View, ubah Role menjadi None/ID secara konseptual dan jangan pilih kolom ini untuk uji statistik.",
+        ))
+
+    high_card_cat = []
+    for c in cat:
+        u = df[c].nunique(dropna=True)
+        if u > 20 and u < len(df):
+            high_card_cat.append(f"{c} ({u} kategori)")
+    if high_card_cat:
+        issues.append(_issue(
+            "Sedang", "Kategori", "Kategori terlalu banyak untuk variabel grup", high_card_cat,
+            "ANOVA/t-test/crosstab sulit dimaknai jika grup terlalu banyak atau terlalu kecil.",
+            "Gabungkan kategori yang serupa atau buat kategori baru yang lebih ringkas.",
+            "Gunakan Transform → Recode Variable untuk mengelompokkan kategori.",
+        ))
+
+    sparse_groups = []
+    for c in cat:
+        vc = df[c].dropna().astype(str).value_counts()
+        if len(vc) >= 2 and (vc < 2).any():
+            sparse_groups.append(f"{c} (ada kategori n<2)")
+    if sparse_groups:
+        issues.append(_issue(
+            "Sedang", "Ukuran grup", "Ada kategori dengan anggota sangat sedikit", sparse_groups[:8],
+            "Uji beda butuh data memadai di setiap grup; grup sangat kecil membuat hasil tidak stabil.",
+            "Gabungkan kategori kecil, hapus kategori outlier, atau tambah data untuk kategori tersebut.",
+            "Cek Deskriptif → Frekuensi Kategori sebelum memakai kolom sebagai grup.",
+        ))
+
+    outlier_cols = []
+    for c in num:
+        s = safe_numeric(df[c]).dropna()
+        if len(s) >= 5 and s.std(ddof=1) > 0:
+            z = np.abs(stats.zscore(s, nan_policy="omit"))
+            count = int(np.sum(z > 3))
+            if count:
+                outlier_cols.append(f"{c} ({count} outlier |z|>3)")
+    if outlier_cols:
+        issues.append(_issue(
+            "Ringan", "Outlier", "Ada nilai ekstrem pada variabel numerik", outlier_cols[:10],
+            "Outlier dapat memengaruhi mean, korelasi, regresi, t-test, dan ANOVA.",
+            "Periksa apakah outlier adalah salah input, fenomena nyata, atau perlu transformasi/winsorizing.",
+            "Buka Visualisasi → boxplot/histogram untuk melihat bentuk distribusi sebelum memutuskan.",
+        ))
+
+    if metadata is not None and isinstance(metadata, pd.DataFrame) and not metadata.empty:
+        mismatch = []
+        for _, row in metadata.iterrows():
+            c = row.get("Name")
+            if c not in df.columns:
+                continue
+            measure = str(row.get("Measure", "")).lower()
+            if measure == "scale" and not pd.api.types.is_numeric_dtype(df[c]):
+                mismatch.append(f"{c} (Scale tetapi bukan numeric)")
+            if measure in ["nominal", "ordinal"] and pd.api.types.is_numeric_dtype(df[c]) and df[c].nunique(dropna=True) > 20:
+                mismatch.append(f"{c} ({row.get('Measure')} tetapi unik >20)")
+        if mismatch:
+            issues.append(_issue(
+                "Sedang", "Variable View", "Measure level mungkin tidak cocok", mismatch[:10],
+                "Measure level memandu pemilihan uji statistik. Salah label bisa membuat pengguna memilih analisis yang keliru.",
+                "Perbaiki Measure: Scale untuk skor/usia/nilai kontinu; Nominal untuk kategori; Ordinal untuk urutan/Likert item.",
+                "Buka Data → Variable View, lalu ubah Measure sesuai arti variabel.",
+            ))
+
+    if not cat:
+        issues.append(_issue(
+            "Info", "Variabel grup", "Tidak ada kolom kategorik/teks", "-",
+            "Uji beda antar kelompok butuh variabel grup, misalnya gender/kelas/perlakuan.",
+            "Jika desain riset membandingkan kelompok, tambahkan kolom grup atau recode skor menjadi kategori yang bermakna.",
+            "Contoh kolom grup: kelompok, kelas, jenis_kelamin, perlakuan, kategori_usia.",
+        ))
+
+    if not issues:
+        issues.append(_issue(
+            "OK", "Kesiapan data", "Tidak ditemukan masalah besar", "Semua data",
+            "Struktur data cukup aman untuk eksplorasi awal.",
+            "Tetap cek asumsi sesuai analisis yang dipilih.",
+            "Lanjut ke Deskriptif/Uji Statistik, lalu baca tab Insight Riset.",
+        ))
+
+    result = pd.DataFrame(issues)
+    result["_rank"] = result["Prioritas"].map(_sev_rank)
+    return result.sort_values(["_rank", "Area"]).drop(columns="_rank").reset_index(drop=True)
+
+
+def compatibility_score(issues_df):
+    if issues_df is None or issues_df.empty:
+        return 100
+    penalties = {"Kritis": 35, "Tinggi": 20, "Sedang": 10, "Ringan": 4, "Info": 0, "OK": 0}
+    score = 100
+    for sev in issues_df.get("Prioritas", []):
+        score -= penalties.get(str(sev), 0)
+    return int(max(0, min(100, score)))
+
+
+def beginner_data_recipe(df, issues_df):
+    rows = []
+    score = compatibility_score(issues_df)
+    if score < 60:
+        rows.append({"Urutan": 1, "Langkah": "Rapikan struktur file", "Apa yang dilakukan": "Pastikan baris pertama adalah nama kolom, tidak ada kolom kosong/duplikat, dan setiap baris adalah satu responden/observasi."})
+        rows.append({"Urutan": 2, "Langkah": "Bersihkan tipe data", "Apa yang dilakukan": "Kolom skor/nilai harus terbaca numeric. Hapus simbol Rp, %, spasi, atau tanda koma/titik yang salah."})
+        rows.append({"Urutan": 3, "Langkah": "Tangani missing value", "Apa yang dilakukan": "Ubah kode '-', 99, atau NA menjadi missing value yang konsisten, lalu tentukan apakah dihapus atau diimputasi."})
+    else:
+        rows.append({"Urutan": 1, "Langkah": "Cek Variable View", "Apa yang dilakukan": "Pastikan Measure sudah benar: Scale untuk skor/nilai/usia, Nominal untuk kategori, Ordinal untuk Likert/tingkatan."})
+        rows.append({"Urutan": 2, "Langkah": "Jalankan deskriptif", "Apa yang dilakukan": "Lihat mean, standar deviasi, frekuensi, dan missing value sebelum uji hipotesis."})
+    rows.append({"Urutan": len(rows)+1, "Langkah": "Pilih uji sesuai desain", "Apa yang dilakukan": "Hubungan dua skor → korelasi; beda dua grup → t-test; beda >2 grup → ANOVA/Kruskal; prediksi → regresi; kuesioner → reliabilitas/EFA."})
+    rows.append({"Urutan": len(rows)+1, "Langkah": "Baca insight riset", "Apa yang dilakukan": "Setelah output dibuat, buka tab Insight Riset untuk menafsirkan p-value, effect size, asumsi, dan makna substantif."})
+    return pd.DataFrame(rows)
+
+
+def suggest_compatible_analyses(df):
+    num = numeric_cols(df)
+    cat = categorical_cols(df)
+    rows = []
+
+    def add(name, readiness, needed, suggestion, beginner_note):
+        rows.append({"Analisis": name, "Kesiapan": readiness, "Yang Dibutuhkan": needed, "Saran Variabel": suggestion, "Catatan untuk User Awam": beginner_note})
+
+    if num:
+        add("Statistik deskriptif", "✅ Siap", "Minimal 1 kolom numerik", ", ".join(num[:6]), "Mulai dari sini untuk memahami nilai tengah, sebaran, dan missing.")
+    else:
+        add("Statistik deskriptif numerik", "❌ Belum siap", "Minimal 1 kolom numerik", "Ubah kolom skor/nilai menjadi angka", "Cek apakah angka masih terbaca sebagai teks.")
+
+    if len(num) >= 2:
+        add("Korelasi Pearson/Spearman", "✅ Siap", "Minimal 2 kolom numerik", f"{num[0]} + {num[1]}", "Gunakan untuk melihat hubungan antar skor/nilai.")
+    else:
+        add("Korelasi", "❌ Belum siap", "Minimal 2 kolom numerik", "Tambahkan/ubah satu lagi variabel numeric", "Contoh: motivasi dan prestasi.")
+
+    two_level = []
+    multi_level = []
+    for c in cat + num:
+        u = df[c].dropna().nunique()
+        if u == 2:
+            two_level.append(c)
+        if 3 <= u <= 10:
+            multi_level.append(c)
+    if num and two_level:
+        add("Independent T-Test", "✅ Siap", "1 skor numeric + 1 grup dua kategori", f"DV: {num[0]}, Grup: {two_level[0]}", "Cocok untuk membandingkan rata-rata dua kelompok.")
+    else:
+        add("Independent T-Test", "⚠️ Perlu disiapkan", "1 skor numeric + 1 grup dua kategori", "Tambahkan kolom grup dengan tepat 2 kategori", "Contoh grup: kontrol vs eksperimen, laki-laki vs perempuan.")
+
+    if len(num) >= 2:
+        add("Paired T-Test", "✅ Siap secara format wide", "2 kolom numeric berpasangan", f"Before: {num[0]}, After: {num[1]}", "Pastikan dua kolom berasal dari orang/objek yang sama sebelum-sesudah.")
+    else:
+        add("Paired T-Test", "⚠️ Perlu disiapkan", "2 kolom numeric berpasangan", "Tambahkan kolom pre dan post", "Contoh: pretest dan posttest.")
+
+    if num and multi_level:
+        add("One-Way ANOVA", "✅ Siap", "1 skor numeric + 1 grup dengan ≥3 kategori", f"DV: {num[0]}, Grup: {multi_level[0]}", "Cocok untuk membandingkan rata-rata lebih dari dua kelompok.")
+    elif len(num) >= 3:
+        add("One-Way ANOVA format wide", "✅ Siap secara format wide", "≥3 kolom numeric yang mewakili grup", ", ".join(num[:3]), "Setiap kolom dianggap grup terpisah.")
+    else:
+        add("One-Way ANOVA", "⚠️ Perlu disiapkan", "1 skor numeric + grup ≥3 kategori, atau ≥3 kolom grup numeric", "Tambahkan kolom grup atau kolom skor per grup", "Contoh grup: kelas A/B/C.")
+
+    if len(cat) >= 2:
+        add("Crosstab & Chi-Square", "✅ Siap", "2 kolom kategorik", f"{cat[0]} × {cat[1]}", "Gunakan untuk hubungan antar kategori.")
+    else:
+        add("Crosstab & Chi-Square", "⚠️ Perlu disiapkan", "2 kolom kategorik", "Tambahkan minimal 2 variabel kategori", "Contoh: gender dan pilihan_produk.")
+
+    if len(num) >= 2:
+        add("Regresi Linear", "✅ Siap format dasar", "1 target numeric + minimal 1 prediktor", f"Y: {num[0]}, X: {', '.join(num[1:4])}", "Gunakan untuk memprediksi nilai Y dari X.")
+    else:
+        add("Regresi Linear", "❌ Belum siap", "Minimal 2 kolom numeric atau prediktor kategorik yang jelas", "Tambahkan target dan prediktor", "Contoh: prestasi diprediksi oleh motivasi dan jam_belajar.")
+
+    if len(num) >= 3:
+        add("Reliabilitas Cronbach Alpha", "✅ Siap secara teknis", "Minimal 3 item numeric satu konstruk", ", ".join(num[:6]), "Pastikan item memang mengukur konstruk yang sama.")
+    else:
+        add("Reliabilitas Cronbach Alpha", "⚠️ Perlu disiapkan", "Minimal 3 item numeric", "Tambahkan item kuesioner", "Contoh: item_motivasi_1 sampai item_motivasi_5.")
+
+    if len(num) >= 3 and len(df) >= max(30, len(num) * 5):
+        add("EFA / Analisis Faktor", "✅ Cukup siap", "≥3 item numeric dan sampel cukup", ", ".join(num[:8]), "Idealnya jumlah responden ≥5 kali jumlah item, lebih baik ≥100.")
+    elif len(num) >= 3:
+        add("EFA / Analisis Faktor", "⚠️ Bisa dicoba, sampel mungkin kurang", "≥3 item numeric dan sampel cukup", ", ".join(num[:8]), "Gunakan sebagai eksplorasi; hati-hati menafsirkan jika N kecil.")
+    else:
+        add("EFA / Analisis Faktor", "❌ Belum siap", "Minimal 3 item numeric", "Tambahkan item kuesioner numeric", "EFA tidak cocok untuk hanya 1-2 variabel.")
+
+    return pd.DataFrame(rows)
+
+
+def analysis_specific_guidance(df, analysis_name):
+    num = numeric_cols(df)
+    cat = categorical_cols(df)
+    rows = []
+    def row(check, status, fix):
+        rows.append({"Checklist": check, "Status": status, "Apa yang perlu dilakukan": fix})
+
+    if analysis_name == "Independent T-Test":
+        two_level = [c for c in df.columns if df[c].dropna().nunique() == 2]
+        row("Ada variabel numeric sebagai nilai/DV", "✅ Ada" if num else "❌ Belum ada", "Ubah skor/nilai menjadi numeric atau tambahkan kolom skor.")
+        row("Ada variabel grup tepat 2 kategori", "✅ Ada: " + ", ".join(two_level[:4]) if two_level else "❌ Belum ada", "Tambahkan/recode grup menjadi dua kategori, misalnya kontrol vs eksperimen.")
+        row("Setiap grup minimal 2 data", "ℹ️ Cek frekuensi", "Buka Deskriptif → Frekuensi Kategori untuk memastikan setiap grup punya cukup data.")
+    elif analysis_name == "ANOVA":
+        multi = [c for c in df.columns if 3 <= df[c].dropna().nunique() <= 10]
+        row("Ada variabel numeric sebagai DV", "✅ Ada" if num else "❌ Belum ada", "Ubah skor/nilai menjadi numeric.")
+        row("Ada grup ≥3 kategori", "✅ Ada: " + ", ".join(multi[:4]) if multi else "⚠️ Belum jelas", "Tambahkan/recode kolom grup menjadi 3+ kategori yang bermakna.")
+        row("Ukuran grup memadai", "ℹ️ Cek frekuensi", "Gabungkan kategori dengan n sangat kecil atau tambah data.")
+    elif analysis_name == "Korelasi":
+        row("Minimal 2 variabel numeric", "✅ Siap" if len(num) >= 2 else "❌ Belum siap", "Tambahkan/konversi variabel numeric.")
+        row("Hubungan kira-kira linear/monoton", "ℹ️ Perlu grafik", "Buka Visualisasi → Scatter plot sebelum menafsirkan korelasi.")
+        row("Tidak didominasi outlier", "ℹ️ Perlu cek", "Gunakan boxplot/scatter; jika banyak outlier, pertimbangkan Spearman.")
+    elif analysis_name == "Regresi Linear":
+        row("Ada target numeric", "✅ Ada" if num else "❌ Belum ada", "Pilih kolom hasil/target yang numeric.")
+        row("Ada prediktor", "✅ Ada" if len(df.columns) >= 2 else "❌ Belum ada", "Tambahkan variabel prediktor teoritis.")
+        row("Multikolinearitas terkendali", "ℹ️ Perlu VIF", "Setelah regresi, cek VIF; VIF tinggi berarti prediktor saling tumpang tindih.")
+    elif analysis_name == "Reliabilitas / Cronbach Alpha":
+        row("Minimal 3 item numeric", "✅ Siap" if len(num) >= 3 else "❌ Belum siap", "Tambahkan minimal 3 item skala yang mengukur konstruk sama.")
+        row("Arah item sama", "ℹ️ Perlu cek", "Reverse coding item negatif sebelum menghitung alpha.")
+        row("Item satu konstruk", "ℹ️ Perlu teori", "Jangan campur item dari dimensi berbeda dalam satu alpha kecuali memang satu skala.")
+    elif analysis_name == "EFA":
+        row("Minimal 3 item numeric", "✅ Ada" if len(num) >= 3 else "❌ Belum ada", "Tambahkan item numeric yang akan difaktorkan.")
+        row("Sampel memadai", "✅ Cukup" if len(df) >= max(30, len(num)*5) else "⚠️ Terbatas", "Ideal: N ≥ 5×jumlah item, lebih baik ≥100.")
+        row("Korelasi antar item cukup", "ℹ️ Cek KMO/Bartlett", "Jika KMO <0.60, revisi/hapus item yang kurang berkorelasi.")
+    else:
+        row("Pilih analisis", "ℹ️ Info", "Gunakan tabel saran analisis untuk melihat uji yang cocok dengan dataset.")
+    return pd.DataFrame(rows)
+
 # Header
 left, right = st.columns([0.72, 0.28])
 with left:
@@ -1530,7 +1986,7 @@ cat_cols = categorical_cols(df)
 all_cols = df.columns.tolist()
 
 # Navigasi utama stabil: hanya menu aktif yang dirender
-section_labels = ['🗂️ Data', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor']
+section_labels = ['🗂️ Data', '🧰 Kompatibilitas Data', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor']
 nav_method = getattr(st, "segmented_control", None)
 if nav_method is not None:
     try:
@@ -1646,6 +2102,95 @@ if active_section == '🗂️ Data':
         if _is_streamlit_control_exception(exc):
             raise
         st.error("Bagian 🗂️ Data mengalami kendala, tetapi aplikasi tetap berjalan.")
+        st.exception(exc)
+
+
+elif active_section == '🧰 Kompatibilitas Data':
+    try:
+        st.subheader("🧰 Cek Kompatibilitas Data & Panduan Perbaikan")
+        st.caption("Bagian ini dibuat untuk pengguna awam: aplikasi mendiagnosis data, menjelaskan masalahnya, lalu memberi langkah perbaikan yang praktis sebelum analisis statistik dijalankan.")
+
+        issues = analyze_data_compatibility(df, st.session_state.get("metadata"))
+        profile = _column_profile(df, st.session_state.get("metadata"))
+        suggestions = suggest_compatible_analyses(df)
+        score = compatibility_score(issues)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Skor kesiapan", f"{score}/100")
+        c2.metric("Masalah kritis/tinggi", int(issues["Prioritas"].isin(["Kritis", "Tinggi"]).sum()))
+        c3.metric("Kolom numeric", len(num_cols))
+        c4.metric("Kolom kategori/teks", len(cat_cols))
+
+        if score >= 80:
+            st.success("✅ Data cukup siap untuk eksplorasi dan sebagian besar analisis dasar. Tetap cek asumsi sesuai uji yang dipilih.")
+        elif score >= 60:
+            st.warning("⚠️ Data bisa dianalisis, tetapi ada beberapa hal yang sebaiknya dirapikan agar hasil lebih mudah dimaknai.")
+        else:
+            st.error("🚧 Data belum ideal. Ikuti rekomendasi perbaikan di bawah agar analisis tidak salah baca.")
+
+        st.markdown("### 1) Diagnosis masalah data")
+        priority_filter = st.multiselect(
+            "Tampilkan prioritas",
+            ["Kritis", "Tinggi", "Sedang", "Ringan", "Info", "OK"],
+            default=["Kritis", "Tinggi", "Sedang", "Ringan", "Info"],
+            key="compat_priority_filter",
+        )
+        view_issues = issues[issues["Prioritas"].isin(priority_filter)] if priority_filter else issues
+        st.dataframe(view_issues, use_container_width=True, hide_index=True)
+
+        st.markdown("### 2) Apa yang sebaiknya dilakukan dulu?")
+        recipe = beginner_data_recipe(df, issues)
+        st.dataframe(recipe, use_container_width=True, hide_index=True)
+
+        st.markdown("### 3) Profil setiap kolom")
+        st.caption("Gunakan tabel ini untuk mengetahui apakah kolom terbaca sebagai angka, kategori, tanggal, ID, kosong, atau perlu diganti tipe datanya.")
+        st.dataframe(profile, use_container_width=True, hide_index=True)
+
+        st.markdown("### 4) Uji statistik apa yang cocok dengan data ini?")
+        st.dataframe(suggestions, use_container_width=True, hide_index=True)
+
+        st.markdown("### 5) Checklist khusus sebelum menjalankan analisis")
+        chosen_analysis = st.selectbox(
+            "Pilih analisis yang ingin dicek",
+            ["Independent T-Test", "ANOVA", "Korelasi", "Regresi Linear", "Reliabilitas / Cronbach Alpha", "EFA"],
+            key="compat_analysis_select",
+        )
+        st.dataframe(analysis_specific_guidance(df, chosen_analysis), use_container_width=True, hide_index=True)
+
+        st.markdown("### 6) Format data yang paling ramah untuk aplikasi")
+        st.info(
+            """
+            **Aturan sederhana:** 1 baris = 1 responden/observasi, 1 kolom = 1 variabel.  
+            Gunakan nama kolom pendek tanpa spasi, misalnya `jenis_kelamin`, `usia`, `skor_pre`, `skor_post`, `motivasi_1`.  
+            Untuk angka, jangan campur dengan teks seperti `Rp 10.000`, `80%`, atau `tinggi=5`. Pisahkan label kategori lewat **Variable View**.
+            """
+        )
+
+        export_df = pd.concat(
+            {
+                "diagnosis": issues.reset_index(drop=True),
+                "profil_kolom": profile.reset_index(drop=True),
+                "saran_analisis": suggestions.reset_index(drop=True),
+            },
+            names=["Bagian", "No"],
+        ).reset_index(level=0)
+        st.download_button(
+            "⬇️ Download Laporan Kompatibilitas CSV",
+            data=export_df.to_csv(index=False).encode("utf-8"),
+            file_name="laporan_kompatibilitas_data.csv",
+            mime="text/csv",
+            key="download_compat_csv",
+        )
+
+        if st.button("💾 Simpan Diagnosis ke Output Viewer", key="save_compat_report"):
+            add_report("Diagnosis Kompatibilitas Data", issues, f"Skor kesiapan data: {score}/100. Gunakan rekomendasi ini sebelum analisis inferensial.")
+            add_report("Saran Analisis yang Cocok", suggestions, "Daftar analisis yang cocok/tidak cocok berdasarkan struktur data aktif.")
+            st.success("Diagnosis kompatibilitas disimpan ke Output Viewer.")
+
+    except BaseException as exc:
+        if _is_streamlit_control_exception(exc):
+            raise
+        st.error("Bagian 🧰 Kompatibilitas Data mengalami kendala, tetapi aplikasi tetap berjalan.")
         st.exception(exc)
 
 elif active_section == '🔁 Transform':
@@ -2523,4 +3068,4 @@ with st.expander("📖 Catatan Metodologis"):
     )
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.7 · SPSS-like Research Insight Workflow</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.8 · SPSS-like Research Insight Workflow</p>", unsafe_allow_html=True)
