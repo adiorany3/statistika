@@ -2497,16 +2497,56 @@ def variable_role_suggestions(df):
     return pd.DataFrame(rows)
 
 
+def _issues_to_records(issues):
+    """Normalize compatibility issues to list[dict].
+
+    Beberapa menu mengirim issues sebagai DataFrame, sementara helper lain
+    bisa mengirim list of dict atau list of strings. Fungsi ini membuat
+    semua bentuk tersebut aman dibaca agar UI tidak jatuh hanya karena
+    format diagnosis berbeda.
+    """
+    if issues is None:
+        return []
+    if isinstance(issues, pd.DataFrame):
+        if issues.empty:
+            return []
+        return issues.fillna("").to_dict("records")
+    if isinstance(issues, dict):
+        return [issues]
+    records = []
+    if isinstance(issues, (list, tuple, set)):
+        for item in issues:
+            if isinstance(item, dict):
+                records.append(item)
+            else:
+                records.append({
+                    "Prioritas": "Info",
+                    "Masalah": str(item),
+                    "Area": "Catatan",
+                    "Solusi": "Tinjau kembali diagnosis kompatibilitas data.",
+                })
+        return records
+    return [{
+        "Prioritas": "Info",
+        "Masalah": str(issues),
+        "Area": "Catatan",
+        "Solusi": "Tinjau kembali diagnosis kompatibilitas data.",
+    }]
+
+
 def build_next_best_actions(df, issues, score):
     num = numeric_cols(df)
     cat = categorical_cols(df)
+    issue_records = _issues_to_records(issues)
     actions = []
-    critical = [i for i in issues if i.get("Prioritas") == "Kritis"]
-    high = [i for i in issues if i.get("Prioritas") == "Tinggi"]
+    critical = [i for i in issue_records if str(i.get("Prioritas", "")).lower() == "kritis"]
+    high = [i for i in issue_records if str(i.get("Prioritas", "")).lower() == "tinggi"]
     if critical:
         actions.append({"Urutan": 1, "Langkah": "Perbaiki masalah kritis", "Menu": "🧰 Kompatibilitas Data", "Kenapa": critical[0].get("Masalah", "Ada masalah kritis pada data")})
     elif high:
         actions.append({"Urutan": 1, "Langkah": "Bersihkan format data", "Menu": "🧙 Smart Assistant → Data Repair Assistant", "Kenapa": high[0].get("Masalah", "Ada masalah data prioritas tinggi")})
+    elif score < 70:
+        actions.append({"Urutan": 1, "Langkah": "Tinjau kualitas data", "Menu": "🧰 Kompatibilitas Data", "Kenapa": "Skor kesiapan data masih perlu ditingkatkan sebelum analisis utama"})
     else:
         actions.append({"Urutan": 1, "Langkah": "Lihat profil dan pola awal", "Menu": "📋 Deskriptif", "Kenapa": "Data cukup siap; mulai dari ringkasan dan frekuensi"})
     if len(num) >= 2:

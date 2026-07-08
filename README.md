@@ -1,8 +1,8 @@
-# Statistik Pro+ v4.0 — Comprehensive Guided Statistics Suite
+# Statistik Pro+ v4.1 — Comprehensive Guided Statistics Suite
 
 Aplikasi statistik berbasis Streamlit yang dirancang sebagai alternatif alat hitung/statistika bergaya SPSS, tetapi tetap ramah untuk user awam.
 
-## Prinsip v4.0
+## Prinsip v4.1
 
 - **Lengkap, tetapi tidak membingungkan**: fitur teknis tersedia, namun dibuka bertahap lewat mode Pemula/Ahli.
 - **Dipandu dari data sampai laporan**: upload data → cek kompatibilitas → rekomendasi uji → analisis → insight riset → ekspor laporan.
@@ -92,3 +92,10 @@ streamlit run app.py
 ## Catatan Metodologis
 
 Aplikasi ini membantu analisis dan pelaporan, tetapi interpretasi akhir tetap perlu disesuaikan dengan desain penelitian, teori, kualitas instrumen, dan konteks data. Untuk keputusan riset formal, sertakan effect size, confidence interval, asumsi, dan keterbatasan, bukan hanya p-value.
+
+
+## Update v4.1
+
+- Memperbaiki error di halaman 🚀 Mulai Cepat: `AttributeError: str object has no attribute get`.
+- Diagnosis kompatibilitas data kini dinormalisasi otomatis baik berbentuk DataFrame, dict, list, maupun teks.
+- Rekomendasi langkah berikutnya dibuat lebih defensif agar UI tetap berjalan meskipun format issue berubah.
