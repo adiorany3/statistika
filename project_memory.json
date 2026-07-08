@@ -1,0 +1,56 @@
+{
+  "project_name": "Statistik Pro+",
+  "version": "v4.6 — Memory Continuity Edition",
+  "base_version_logic": "v4.5",
+  "primary_file": "app.py",
+  "framework": "Streamlit",
+  "goal": "Alternatif SPSS/alat hitung statistika yang ramah user awam dan tetap detail untuk user ahli.",
+  "ui_principles": [
+    "Mode Pemula dan Mode Ahli",
+    "Level Detail Ringkas/Lengkap",
+    "Jangan membuat UI membingungkan",
+    "Gunakan expander untuk detail lanjutan",
+    "Hindari tab bertumpuk yang merender semua fitur sekaligus",
+    "Render hanya menu aktif",
+    "Setiap output statistik harus punya interpretasi dan saran tindakan"
+  ],
+  "key_features": [
+    "Data View dan Variable View ala SPSS",
+    "Kompatibilitas data dan data repair assistant",
+    "Mulai Cepat",
+    "Smart Assistant dan wizard rekomendasi uji",
+    "Sample size dan power calculator",
+    "Statistik deskriptif, skewness, kurtosis, normalitas",
+    "T-test, ANOVA, korelasi, chi-square, nonparametrik",
+    "Regresi dan diagnostics",
+    "Reliabilitas, PCA, EFA dengan interpretasi",
+    "Insight riset dan template laporan",
+    "Output viewer dan export Excel/Markdown/HTML/Word"
+  ],
+  "known_fixed_bugs": [
+    "PCA slider min=max crash",
+    "Markdown export missing tabulate",
+    "factor-analyzer force_all_finite conflict with scikit-learn",
+    "Streamlit tab instability",
+    "DuplicateElementKey from sidebar auto-key",
+    "Quick Start issues string/dict mismatch",
+    "suggest_analysis_table undefined",
+    "EFA factor slider min=max crash"
+  ],
+  "must_keep_guards": [
+    "Never create st.slider when min_value == max_value",
+    "Use explicit widget keys for new widgets",
+    "Keep EFA fallback engine",
+    "Normalize issue objects before reading .get",
+    "Wrap feature renderers in local try/except",
+    "py_compile app.py before zipping",
+    "zip -T final zip"
+  ],
+  "recommended_next_work": [
+    "Project save/load format",
+    "Better report builder Word/PDF",
+    "End-to-end guided analysis wizard",
+    "runtime.txt for Streamlit Cloud",
+    "accuracy validation against SPSS/R/JASP"
+  ]
+}

@@ -1,6 +1,19 @@
-# Statistik Pro+ v4.5 — Comprehensive Guided Statistics Suite
+# Statistik Pro+ v4.6 — Memory Continuity Edition
 
 Aplikasi Streamlit untuk analisis statistik yang dirancang sebagai alternatif alat hitung statistika/SPSS dengan UI terpandu untuk pengguna awam dan fitur detail untuk pengguna ahli.
+
+
+## Pembaruan v4.6
+
+Versi ini menambahkan file continuity/memory agar proyek dapat dilanjutkan di sesi ChatGPT lain tanpa kehilangan konteks.
+
+### File continuity yang ditambahkan
+
+- `CHATGPT_MEMORY.md` — konteks lengkap proyek, fitur, bug yang pernah diperbaiki, prinsip UI, dan arah pengembangan berikutnya.
+- `CONTINUE_PROMPT.md` — prompt siap salin untuk membuka proyek ini di ChatGPT/session lain.
+- `project_memory.json` — ringkasan terstruktur untuk AI/tooling.
+
+Jika ingin melanjutkan di chat baru, upload ZIP ini lalu minta ChatGPT membaca `CHATGPT_MEMORY.md` terlebih dahulu.
 
 ## Pembaruan v4.5
 
