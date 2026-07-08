@@ -118,3 +118,9 @@ Untuk laporan akademik, sebaiknya selalu laporkan statistik uji, derajat kebebas
 ---
 
 Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3
+
+
+## Catatan Versi 3.2
+
+- Memperbaiki kompatibilitas EFA pada scikit-learn versi terbaru yang mengganti parameter `force_all_finite` menjadi `ensure_all_finite`.
+- EFA sekarang dipatch otomatis dari dalam aplikasi, sehingga tidak perlu downgrade scikit-learn.

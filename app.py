@@ -36,6 +36,28 @@ except Exception:  # pragma: no cover
 try:
     from sklearn.preprocessing import StandardScaler
     from sklearn.decomposition import PCA
+
+    # Kompatibilitas scikit-learn >= 1.8 dengan factor-analyzer.
+    # factor-analyzer 0.5.x masih memanggil check_array(force_all_finite=...),
+    # sedangkan scikit-learn baru menggantinya menjadi ensure_all_finite=....
+    # Patch ini menjaga EFA tetap jalan tanpa harus downgrade scikit-learn.
+    try:
+        import inspect
+        import sklearn.utils.validation as _sk_validation
+
+        _original_check_array = _sk_validation.check_array
+        _params = inspect.signature(_original_check_array).parameters
+        if "force_all_finite" not in _params and "ensure_all_finite" in _params:
+            def _check_array_compat(*args, force_all_finite=None, ensure_all_finite=None, **kwargs):
+                if ensure_all_finite is None and force_all_finite is not None:
+                    ensure_all_finite = force_all_finite
+                if ensure_all_finite is not None:
+                    kwargs["ensure_all_finite"] = ensure_all_finite
+                return _original_check_array(*args, **kwargs)
+
+            _sk_validation.check_array = _check_array_compat
+    except Exception:
+        pass
 except Exception:  # pragma: no cover
     StandardScaler = None
     PCA = None
@@ -1530,6 +1552,12 @@ with tab_reliability:
                     show_table("EFA Factor Loadings", loadings)
                     show_table("EFA Variance Explained", variance)
                     show_table("EFA Communalities", communalities)
+                except TypeError as exc:
+                    msg = str(exc)
+                    if "force_all_finite" in msg or "ensure_all_finite" in msg:
+                        st.error("EFA gagal karena konflik kompatibilitas factor-analyzer dan scikit-learn. Versi aplikasi ini sudah menyertakan patch kompatibilitas; pastikan menjalankan ZIP revisi terbaru, lalu restart Streamlit.")
+                    else:
+                        st.error(f"EFA gagal dihitung: {exc}")
                 except Exception as exc:
                     st.error(f"EFA gagal dihitung: {exc}")
 
