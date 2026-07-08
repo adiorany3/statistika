@@ -1890,6 +1890,438 @@ def analysis_specific_guidance(df, analysis_name):
         row("Pilih analisis", "ℹ️ Info", "Gunakan tabel saran analisis untuk melihat uji yang cocok dengan dataset.")
     return pd.DataFrame(rows)
 
+
+
+# -----------------------------------------------------------------------------
+# Smart Statistical Assistant v3.9
+# -----------------------------------------------------------------------------
+def sanitize_column_name(name):
+    """Buat nama kolom ramah formula/syntax: huruf kecil, underscore, unik ditangani di helper lain."""
+    value = str(name).strip()
+    value = re.sub(r"\s+", "_", value)
+    value = re.sub(r"[^0-9A-Za-z_]+", "", value)
+    value = re.sub(r"_+", "_", value).strip("_")
+    if not value:
+        value = "var"
+    if re.match(r"^\d", value):
+        value = "v_" + value
+    return value.lower()
+
+
+def make_unique_columns(columns):
+    seen = {}
+    result = []
+    for col in columns:
+        base = sanitize_column_name(col)
+        seen[base] = seen.get(base, 0) + 1
+        result.append(base if seen[base] == 1 else f"{base}_{seen[base]}")
+    return result
+
+
+def detect_repair_actions(df):
+    actions = []
+    if any(str(c).strip() != sanitize_column_name(c) for c in df.columns) or len(set(map(str, df.columns))) != len(df.columns):
+        actions.append({
+            "Kode": "clean_names",
+            "Masalah": "Nama kolom belum ramah analisis atau ada potensi duplikat",
+            "Dampak": "Rumus/regresi/syntax lebih mudah error bila nama kolom berisi spasi, simbol, atau duplikat.",
+            "Tindakan": "Rapikan nama kolom menjadi huruf kecil + underscore dan pastikan unik.",
+        })
+    num_like = []
+    for col in df.columns:
+        ok, ratio = _is_numeric_like(df[col])
+        if ok:
+            num_like.append(f"{col} ({ratio*100:.0f}% terlihat angka)")
+    if num_like:
+        actions.append({
+            "Kode": "convert_numeric_like",
+            "Masalah": "Kolom angka masih terbaca sebagai teks",
+            "Dampak": "Kolom tidak muncul untuk t-test, ANOVA, korelasi, regresi, reliabilitas, dan EFA.",
+            "Tindakan": "Konversi kolom yang terlihat numerik menjadi numeric.",
+        })
+    placeholder_tokens = ["-", "--", "?", "NA", "N/A", "na", "n/a", "null", "None", "missing", "tidak ada", ""]
+    placeholder_cols = []
+    for col in df.columns:
+        if df[col].dtype == object:
+            count = int(df[col].astype(str).str.strip().isin(placeholder_tokens).sum())
+            if count:
+                placeholder_cols.append(f"{col} ({count})")
+    if placeholder_cols:
+        actions.append({
+            "Kode": "replace_missing_tokens",
+            "Masalah": "Ada kode missing yang masih terbaca sebagai nilai biasa",
+            "Dampak": "Frekuensi kategori bisa bias dan konversi numerik bisa gagal.",
+            "Tindakan": "Ubah kode missing umum seperti '-', '?', 'NA', 'null' menjadi NaN.",
+        })
+    constant_cols = [c for c in df.columns if df[c].nunique(dropna=True) <= 1]
+    if constant_cols:
+        actions.append({
+            "Kode": "drop_constant",
+            "Masalah": "Ada kolom tanpa variasi",
+            "Dampak": "Kolom konstan tidak berguna untuk korelasi, regresi, EFA, atau uji beda.",
+            "Tindakan": "Hapus kolom konstan bila bukan metadata penting.",
+        })
+    all_missing = [c for c in df.columns if df[c].isna().all()]
+    if all_missing:
+        actions.append({
+            "Kode": "drop_empty",
+            "Masalah": "Ada kolom kosong total",
+            "Dampak": "Membingungkan user dan bisa mengganggu pilihan variabel.",
+            "Tindakan": "Hapus kolom yang seluruh nilainya kosong.",
+        })
+    return pd.DataFrame(actions)
+
+
+def apply_repair_action(df, action_code):
+    repaired = df.copy()
+    note = ""
+    if action_code == "clean_names":
+        old_cols = list(repaired.columns)
+        repaired.columns = make_unique_columns(old_cols)
+        note = "Nama kolom dirapikan menjadi format aman: huruf kecil, underscore, dan unik."
+    elif action_code == "replace_missing_tokens":
+        tokens = ["-", "--", "?", "NA", "N/A", "na", "n/a", "null", "None", "missing", "tidak ada", ""]
+        repaired = repaired.replace(tokens, np.nan)
+        note = "Kode missing umum diganti menjadi NaN."
+    elif action_code == "convert_numeric_like":
+        converted_cols = []
+        for col in repaired.columns:
+            ok, _ = _is_numeric_like(repaired[col])
+            if ok:
+                cleaned = repaired[col].astype(str).str.strip()
+                # Jika ada koma sebagai desimal dan titik sebagai ribuan, pola ini umumnya berhasil untuk data Indonesia.
+                cleaned = cleaned.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+                cleaned = cleaned.str.replace(r"[^0-9\-\.]+", "", regex=True)
+                repaired[col] = pd.to_numeric(cleaned.replace("", np.nan), errors="coerce")
+                converted_cols.append(col)
+        note = "Kolom terlihat numerik dikonversi: " + (", ".join(map(str, converted_cols)) if converted_cols else "tidak ada kolom yang perlu dikonversi")
+    elif action_code == "drop_constant":
+        cols = [c for c in repaired.columns if repaired[c].nunique(dropna=True) <= 1]
+        repaired = repaired.drop(columns=cols)
+        note = "Kolom tanpa variasi dihapus: " + (", ".join(map(str, cols)) if cols else "tidak ada")
+    elif action_code == "drop_empty":
+        cols = [c for c in repaired.columns if repaired[c].isna().all()]
+        repaired = repaired.drop(columns=cols)
+        note = "Kolom kosong total dihapus: " + (", ".join(map(str, cols)) if cols else "tidak ada")
+    else:
+        note = "Tidak ada tindakan yang diterapkan."
+    return repaired, note
+
+
+def classify_variable(df, col):
+    if not col or col not in df.columns:
+        return "Tidak dipilih"
+    s = df[col].dropna()
+    if s.empty:
+        return "Kosong"
+    if pd.api.types.is_numeric_dtype(df[col]):
+        if s.nunique() <= 2:
+            return "Numeric biner/kode kategori"
+        if s.nunique() <= 10 and np.allclose(pd.to_numeric(s, errors="coerce").dropna() % 1, 0):
+            return "Ordinal/numeric diskrit"
+        return "Scale/numeric kontinu"
+    unique = s.nunique()
+    if unique == 2:
+        return "Kategori 2 kelompok"
+    if unique <= 10:
+        return "Kategori multi-kelompok"
+    return "Teks/kategori banyak"
+
+
+def smart_test_recommendation(df, objective, y=None, x=None, group=None, paired_y=None):
+    alpha_note = "Selalu baca bersama effect size, confidence interval, dan asumsi data."
+    rows = []
+    def add(priority, test, condition, alternative, why, next_step):
+        rows.append({
+            "Prioritas": priority,
+            "Uji/Analisis Disarankan": test,
+            "Kondisi Data": condition,
+            "Alternatif Jika Asumsi Lemah": alternative,
+            "Mengapa Cocok": why,
+            "Langkah Berikutnya": next_step,
+        })
+
+    y_type = classify_variable(df, y)
+    x_type = classify_variable(df, x)
+    g_type = classify_variable(df, group)
+    num = numeric_cols(df)
+    cat = categorical_cols(df)
+
+    if objective == "Membandingkan rata-rata antar kelompok":
+        if y in num and group in df.columns:
+            k = df[group].dropna().nunique()
+            if k == 2:
+                add("Utama", "Independent Samples T-Test", f"Y={y_type}; Grup={g_type}", "Mann-Whitney U", "Satu skor numerik dibandingkan pada dua kelompok independen.", "Cek normalitas per grup, homogenitas varians, lalu jalankan t-test.")
+            elif k >= 3:
+                add("Utama", "One-Way ANOVA", f"Y={y_type}; Grup={k} kategori", "Kruskal-Wallis + Dunn post-hoc", "Satu skor numerik dibandingkan pada tiga kelompok atau lebih.", "Cek Levene, normalitas residual, lalu lanjut post-hoc bila signifikan.")
+            else:
+                add("Perlu data", "Belum bisa ditentukan", "Variabel grup kurang dari 2 kategori", "-", "Uji beda butuh minimal dua kelompok.", "Tambahkan/recode grup agar memiliki 2+ kategori.")
+        elif len(num) >= 2 and not group:
+            add("Alternatif", "Paired T-Test / Repeated comparison format wide", "Ada ≥2 kolom numerik", "Wilcoxon Signed-Rank", "Jika dua kolom adalah before-after orang yang sama, gunakan paired t-test.", "Pilih kolom before dan after di Uji Statistik.")
+        else:
+            add("Perlu data", "Uji beda belum siap", "Butuh Y numerik dan grup kategori", "-", "Format data belum cukup untuk membandingkan rata-rata.", "Tambahkan kolom skor dan kolom kelompok.")
+    elif objective == "Melihat hubungan antar variabel":
+        if y in num and x in num:
+            add("Utama", "Korelasi Pearson", f"X={x_type}; Y={y_type}", "Spearman/Kendall", "Dua variabel numerik dapat diuji hubungan linear/monoton.", "Buat scatter plot, cek outlier, lalu jalankan korelasi.")
+        elif x in df.columns and y in df.columns:
+            add("Alternatif", "Crosstab/Chi-Square atau Korelasi Spearman", f"X={x_type}; Y={y_type}", "Fisher Exact untuk tabel kecil", "Jenis variabel tidak sama-sama kontinu sehingga perlu uji kategori/ordinal.", "Pastikan measurement level benar di Variable View.")
+        else:
+            add("Perlu data", "Korelasi belum siap", "Butuh minimal dua variabel", "-", "Hubungan butuh pasangan variabel yang jelas.", "Pilih dua kolom skor atau dua kategori yang ingin dikaitkan.")
+    elif objective == "Memprediksi variabel hasil":
+        if y in num and (x in df.columns or group in df.columns):
+            add("Utama", "Regresi Linear", f"Y={y_type}; Prediktor={x_type if x else g_type}", "Regresi robust/transformasi jika asumsi lemah", "Target numerik dapat diprediksi dari satu atau beberapa prediktor.", "Jalankan regresi, cek R², koefisien, VIF, residual, dan outlier.")
+        elif y in df.columns and df[y].dropna().nunique() == 2:
+            add("Utama", "Regresi Logistik", f"Y={y_type}; kategori biner", "Chi-square/crosstab untuk eksplorasi", "Target biner cocok dianalisis dengan odds ratio.", "Pastikan kategori target dikodekan 0/1 atau dua label konsisten.")
+        else:
+            add("Perlu data", "Regresi belum siap", "Butuh target Y dan prediktor", "-", "Prediksi membutuhkan variabel hasil yang jelas.", "Pilih target numerik/biner dan beberapa prediktor teoritis.")
+    elif objective == "Menguji kuesioner/skala":
+        n_num = len(num)
+        if n_num >= 3:
+            add("Utama", "Reliabilitas Cronbach's Alpha", f"Ada {n_num} item numerik", "McDonald's Omega / item-total correlation", "Item numerik dapat diuji konsistensi internalnya.", "Pastikan item satu konstruk dan reverse coding item negatif.")
+            add("Lanjutan", "EFA / Analisis Faktor", f"Ada {n_num} item; N={len(df)}", "PCA eksploratori jika sampel kecil", "EFA membantu menemukan dimensi/faktor laten.", "Cek KMO ≥0.60, Bartlett signifikan, loading, cross-loading, dan communality.")
+        else:
+            add("Perlu data", "Reliabilitas/EFA belum siap", "Butuh minimal 3 item numerik", "-", "Skala/kuesioner butuh beberapa item yang mengukur konstruk sama.", "Tambahkan/konversi item Likert menjadi numeric.")
+    elif objective == "Menganalisis data kategori":
+        if len(cat) >= 2 or (x in df.columns and y in df.columns):
+            add("Utama", "Crosstab & Chi-Square", f"X={x_type}; Y={y_type}", "Fisher Exact bila expected count kecil", "Dua variabel kategori dapat diuji asosiasinya.", "Cek persentase baris/kolom dan Cramer's V.")
+        else:
+            add("Perlu data", "Chi-Square belum siap", "Butuh dua variabel kategori", "-", "Data kategori butuh dua kolom kategori yang jelas.", "Tambahkan variabel kategori seperti gender, kelas, status, pilihan.")
+    else:
+        add("Info", "Eksplorasi Deskriptif", "Tujuan belum spesifik", "-", "Deskriptif adalah langkah awal semua analisis.", alpha_note)
+
+    return pd.DataFrame(rows)
+
+
+def compute_quick_effect_sizes(df, y=None, x=None, group=None):
+    rows = []
+    if y in numeric_cols(df) and group in df.columns and df[group].dropna().nunique() == 2:
+        tmp = df[[y, group]].dropna()
+        levels = tmp[group].dropna().unique().tolist()
+        if len(levels) == 2:
+            a = tmp[tmp[group] == levels[0]][y].astype(float)
+            b = tmp[tmp[group] == levels[1]][y].astype(float)
+            if len(a) >= 2 and len(b) >= 2:
+                pooled = np.sqrt(((len(a)-1)*a.var(ddof=1) + (len(b)-1)*b.var(ddof=1)) / max(len(a)+len(b)-2, 1))
+                d = (a.mean() - b.mean()) / pooled if pooled else np.nan
+                correction = 1 - (3 / (4*(len(a)+len(b))-9)) if (len(a)+len(b)) > 2 else 1
+                rows.append({"Ukuran Efek": "Cohen's d", "Nilai": d, "Interpretasi": effect_size_plain_label(abs(d), "d")})
+                rows.append({"Ukuran Efek": "Hedges' g", "Nilai": d * correction, "Interpretasi": effect_size_plain_label(abs(d * correction), "d")})
+    if y in numeric_cols(df) and x in numeric_cols(df):
+        tmp = df[[x, y]].dropna()
+        if len(tmp) >= 3:
+            r, p = stats.pearsonr(tmp[x], tmp[y])
+            rows.append({"Ukuran Efek": "Pearson r", "Nilai": r, "Interpretasi": effect_size_plain_label(abs(r), "r")})
+            rows.append({"Ukuran Efek": "r²", "Nilai": r*r, "Interpretasi": f"Sekitar {r*r*100:.1f}% variasi bersama secara linear"})
+    if y in numeric_cols(df) and group in df.columns and df[group].dropna().nunique() >= 3:
+        tmp = df[[y, group]].dropna()
+        groups = [g[y].astype(float).values for _, g in tmp.groupby(group)]
+        if len(groups) >= 3 and all(len(g) >= 2 for g in groups):
+            all_vals = np.concatenate(groups)
+            grand = all_vals.mean()
+            ss_between = sum(len(g) * (g.mean() - grand) ** 2 for g in groups)
+            ss_total = sum((v - grand) ** 2 for v in all_vals)
+            eta = ss_between / ss_total if ss_total else np.nan
+            rows.append({"Ukuran Efek": "Eta squared (η²)", "Nilai": eta, "Interpretasi": effect_size_plain_label(eta, "eta")})
+    return pd.DataFrame(rows)
+
+
+def effect_size_plain_label(value, kind):
+    try:
+        v = abs(float(value))
+    except Exception:
+        return "Tidak dapat dinilai"
+    if kind == "d":
+        if v < 0.2: return "sangat kecil"
+        if v < 0.5: return "kecil"
+        if v < 0.8: return "sedang"
+        return "besar"
+    if kind == "r":
+        if v < 0.1: return "sangat kecil"
+        if v < 0.3: return "kecil"
+        if v < 0.5: return "sedang"
+        return "besar"
+    if kind == "eta":
+        if v < 0.01: return "sangat kecil"
+        if v < 0.06: return "kecil"
+        if v < 0.14: return "sedang"
+        return "besar"
+    return "Perlu konteks"
+
+
+def normal_power_sample_size(test_type, alpha, power, effect_size, groups=2, predictors=1, r=None, moe=None, proportion=0.5):
+    """Kalkulator sample size ringan. Memakai statsmodels bila tersedia, fallback ke pendekatan normal."""
+    z_alpha = stats.norm.ppf(1 - alpha / 2)
+    z_power = stats.norm.ppf(power)
+    effect_size = float(effect_size) if effect_size else np.nan
+    try:
+        from statsmodels.stats.power import TTestPower, TTestIndPower, FTestAnovaPower
+        if test_type == "Independent t-test" and effect_size > 0:
+            n = TTestIndPower().solve_power(effect_size=effect_size, alpha=alpha, power=power, ratio=1.0, alternative="two-sided")
+            return int(np.ceil(n)), "per kelompok", "Dihitung dengan statsmodels TTestIndPower."
+        if test_type in ["One-sample t-test", "Paired t-test"] and effect_size > 0:
+            n = TTestPower().solve_power(effect_size=effect_size, alpha=alpha, power=power, alternative="two-sided")
+            return int(np.ceil(n)), "total", "Dihitung dengan statsmodels TTestPower."
+        if test_type == "One-way ANOVA" and effect_size > 0:
+            n = FTestAnovaPower().solve_power(effect_size=effect_size, k_groups=max(2, int(groups)), alpha=alpha, power=power)
+            return int(np.ceil(n)), "total", "Effect size ANOVA memakai Cohen's f."
+    except Exception:
+        pass
+
+    if test_type == "Independent t-test" and effect_size > 0:
+        n = 2 * ((z_alpha + z_power) / effect_size) ** 2
+        return int(np.ceil(n)), "per kelompok (aproksimasi)", "Fallback normal approximation."
+    if test_type in ["One-sample t-test", "Paired t-test"] and effect_size > 0:
+        n = ((z_alpha + z_power) / effect_size) ** 2
+        return int(np.ceil(n)), "total (aproksimasi)", "Fallback normal approximation."
+    if test_type == "Correlation" and r and abs(float(r)) > 0 and abs(float(r)) < 1:
+        fisher_z = np.arctanh(abs(float(r)))
+        n = ((z_alpha + z_power) / fisher_z) ** 2 + 3
+        return int(np.ceil(n)), "pasangan data", "Aproksimasi Fisher z untuk korelasi."
+    if test_type == "Survey proportion / margin of error" and moe and float(moe) > 0:
+        n = (z_alpha ** 2) * float(proportion) * (1 - float(proportion)) / (float(moe) ** 2)
+        return int(np.ceil(n)), "responden", "Rumus proporsi sederhana tanpa finite population correction."
+    if test_type == "Multiple regression":
+        m = max(1, int(predictors))
+        n_model = 50 + 8*m
+        n_predictor = 104 + m
+        return int(max(n_model, n_predictor)), "responden (aturan praktis)", "Aturan praktis Green: N ≥ 50+8m dan 104+m."
+    return None, "", "Masukkan effect size/parameter yang valid."
+
+
+def parse_number_list(text_value):
+    vals = re.split(r"[\s,;]+", str(text_value).strip())
+    out = []
+    for v in vals:
+        if not v:
+            continue
+        try:
+            out.append(float(v.replace(",", ".")))
+        except Exception:
+            pass
+    return pd.Series(out, dtype="float64")
+
+
+def descriptive_calculator_table(values):
+    s = pd.Series(values).dropna().astype(float)
+    if s.empty:
+        return pd.DataFrame([{"Statistik": "Error", "Nilai": "Tidak ada angka valid"}])
+    q1, q3 = s.quantile(0.25), s.quantile(0.75)
+    mode_vals = s.mode().tolist()
+    return pd.DataFrame([
+        {"Statistik": "N", "Nilai": len(s)},
+        {"Statistik": "Mean", "Nilai": s.mean()},
+        {"Statistik": "Median", "Nilai": s.median()},
+        {"Statistik": "Modus", "Nilai": ", ".join(f"{x:g}" for x in mode_vals[:5]) if mode_vals else "-"},
+        {"Statistik": "Std. Deviasi", "Nilai": s.std(ddof=1) if len(s) > 1 else np.nan},
+        {"Statistik": "Varians", "Nilai": s.var(ddof=1) if len(s) > 1 else np.nan},
+        {"Statistik": "Minimum", "Nilai": s.min()},
+        {"Statistik": "Q1", "Nilai": q1},
+        {"Statistik": "Q3", "Nilai": q3},
+        {"Statistik": "IQR", "Nilai": q3 - q1},
+        {"Statistik": "Maximum", "Nilai": s.max()},
+        {"Statistik": "Standard Error", "Nilai": stats.sem(s) if len(s) > 1 else np.nan},
+        {"Statistik": "CI 95% Mean", "Nilai": f"{stats.t.interval(0.95, len(s)-1, loc=s.mean(), scale=stats.sem(s))[0]:.4f} s.d. {stats.t.interval(0.95, len(s)-1, loc=s.mean(), scale=stats.sem(s))[1]:.4f}" if len(s) > 1 and s.std(ddof=1) > 0 else "-"},
+    ])
+
+
+def distribution_calculator(dist_name, mode, value, df1=None, df2=None, n=None, p=None, lam=None, alpha=0.05):
+    if dist_name == "Normal/Z":
+        if mode == "P(X ≤ nilai)":
+            return stats.norm.cdf(value)
+        if mode == "P(X ≥ nilai)":
+            return 1 - stats.norm.cdf(value)
+        return stats.norm.ppf(1 - alpha/2)
+    if dist_name == "t":
+        d = int(df1 or 1)
+        if mode == "P(X ≤ nilai)":
+            return stats.t.cdf(value, d)
+        if mode == "P(X ≥ nilai)":
+            return 1 - stats.t.cdf(value, d)
+        return stats.t.ppf(1 - alpha/2, d)
+    if dist_name == "Chi-square":
+        d = int(df1 or 1)
+        if mode == "P(X ≤ nilai)":
+            return stats.chi2.cdf(value, d)
+        if mode == "P(X ≥ nilai)":
+            return 1 - stats.chi2.cdf(value, d)
+        return stats.chi2.ppf(1 - alpha, d)
+    if dist_name == "F":
+        d1, d2 = int(df1 or 1), int(df2 or 1)
+        if mode == "P(X ≤ nilai)":
+            return stats.f.cdf(value, d1, d2)
+        if mode == "P(X ≥ nilai)":
+            return 1 - stats.f.cdf(value, d1, d2)
+        return stats.f.ppf(1 - alpha, d1, d2)
+    if dist_name == "Binomial":
+        nn, pp = int(n or 1), float(p or 0.5)
+        if mode == "P(X ≤ nilai)":
+            return stats.binom.cdf(int(value), nn, pp)
+        if mode == "P(X ≥ nilai)":
+            return 1 - stats.binom.cdf(int(value)-1, nn, pp)
+        return stats.binom.ppf(1 - alpha, nn, pp)
+    if dist_name == "Poisson":
+        ll = float(lam or 1)
+        if mode == "P(X ≤ nilai)":
+            return stats.poisson.cdf(int(value), ll)
+        if mode == "P(X ≥ nilai)":
+            return 1 - stats.poisson.cdf(int(value)-1, ll)
+        return stats.poisson.ppf(1 - alpha, ll)
+    return np.nan
+
+
+def build_report_template(kind, research_title, hypothesis, selected_output_titles):
+    title = research_title.strip() or "[Judul Penelitian]"
+    hyp = hypothesis.strip() or "[Hipotesis penelitian]"
+    output_text = ", ".join(selected_output_titles) if selected_output_titles else "[output analisis yang dipilih]"
+    if kind == "BAB 4 Skripsi/Tesis":
+        return f"""### Template Narasi BAB 4
+
+Penelitian berjudul **{title}** bertujuan untuk menguji: **{hyp}**. Analisis dilakukan menggunakan output: **{output_text}**.
+
+Berdasarkan hasil analisis, peneliti perlu menyajikan tiga hal utama: (1) gambaran deskriptif data, (2) hasil uji asumsi atau kelayakan analisis, dan (3) hasil uji hipotesis. Nilai signifikansi tidak boleh dibaca sendirian; hasil perlu dilengkapi dengan arah hubungan/perbedaan, ukuran efek, interval kepercayaan, serta relevansinya terhadap teori.
+
+Jika hasil signifikan, narasi pembahasan dapat diarahkan pada dukungan empiris terhadap hipotesis. Jika hasil tidak signifikan, pembahasan perlu menekankan bahwa bukti statistik pada data ini belum cukup kuat, bukan berarti hubungan/perbedaan pasti tidak ada. Pertimbangkan ukuran sampel, kualitas instrumen, variasi data, dan kesesuaian model.
+
+**Kalimat siap pakai:**
+> Berdasarkan hasil analisis, diperoleh temuan bahwa [isi temuan utama]. Temuan ini menunjukkan bahwa [makna substantif]. Dengan demikian, hasil penelitian ini [mendukung/tidak cukup mendukung] hipotesis yang diajukan, dengan tetap memperhatikan ukuran efek, asumsi statistik, dan keterbatasan data.
+"""
+    if kind == "APA Style":
+        return f"""### Template APA Style
+
+Study: **{title}**  
+Hypothesis: **{hyp}**  
+Selected output: **{output_text}**
+
+Use this structure:
+
+> A statistical analysis was conducted to examine {hyp}. Report the descriptive statistics first, followed by assumption checks and the main inferential test. Include the test statistic, degrees of freedom when available, *p*-value, confidence interval, and effect size.
+
+Examples:
+
+- Independent t-test: *t*(df) = value, *p* = value, 95% CI [LL, UL], Cohen's *d* = value.
+- ANOVA: *F*(df1, df2) = value, *p* = value, η² = value.
+- Correlation: *r*(df) = value, *p* = value, 95% CI [LL, UL].
+- Regression: β = value, *t* = value, *p* = value, R² = value.
+"""
+    return f"""### Template Ringkasan Manajerial
+
+**Riset:** {title}  
+**Pertanyaan/Hipotesis:** {hyp}  
+**Output yang digunakan:** {output_text}
+
+**Inti temuan:**  
+Tuliskan 1–3 temuan paling penting dari output statistik.
+
+**Makna praktis:**  
+Jelaskan apa arti temuan tersebut untuk keputusan, kebijakan, pembelajaran, layanan, atau pengembangan program.
+
+**Risiko interpretasi:**  
+Sebutkan keterbatasan seperti ukuran sampel, missing value, asumsi yang tidak terpenuhi, atau effect size kecil.
+
+**Rekomendasi:**  
+Berikan langkah berikutnya: tambah data, perbaiki instrumen, lakukan post-hoc, uji model alternatif, atau validasi pada sampel lain.
+"""
+
 # Header
 left, right = st.columns([0.72, 0.28])
 with left:
@@ -1986,7 +2418,7 @@ cat_cols = categorical_cols(df)
 all_cols = df.columns.tolist()
 
 # Navigasi utama stabil: hanya menu aktif yang dirender
-section_labels = ['🗂️ Data', '🧰 Kompatibilitas Data', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor']
+section_labels = ['🗂️ Data', '🧰 Kompatibilitas Data', '🧙 Smart Assistant', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor']
 nav_method = getattr(st, "segmented_control", None)
 if nav_method is not None:
     try:
@@ -2191,6 +2623,217 @@ elif active_section == '🧰 Kompatibilitas Data':
         if _is_streamlit_control_exception(exc):
             raise
         st.error("Bagian 🧰 Kompatibilitas Data mengalami kendala, tetapi aplikasi tetap berjalan.")
+        st.exception(exc)
+
+
+elif active_section == '🧙 Smart Assistant':
+    try:
+        st.subheader("🧙 Smart Statistical Assistant")
+        st.caption("Mode ini memandu user awam: cek kualitas data, pilih tujuan riset, rekomendasi uji, perbaiki data, hitung sampel, dan buat narasi laporan.")
+
+        issues_now = analyze_data_compatibility(df, st.session_state.metadata)
+        score_now = compatibility_score(issues_now)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Skor kesiapan data", f"{score_now}/100")
+        c2.metric("Baris", f"{df.shape[0]:,}")
+        c3.metric("Variabel numerik", len(num_cols))
+        c4.metric("Variabel kategori", len(cat_cols))
+
+        mode = st.radio(
+            "Pilih alat bantu",
+            ["Wizard Uji Otomatis", "Data Repair Assistant", "Sample Size & Power", "Kalkulator Statistik", "Template Narasi Laporan"],
+            horizontal=True,
+            key="smart_assistant_mode",
+        )
+
+        if mode == "Wizard Uji Otomatis":
+            st.markdown("### 🧭 Wizard Pemilihan Uji")
+            st.info("Pilih tujuan riset dan variabel. Aplikasi akan menyarankan uji yang paling masuk akal, alternatif jika asumsi lemah, dan langkah berikutnya.")
+            objective = st.selectbox(
+                "Tujuan riset/analisis",
+                [
+                    "Membandingkan rata-rata antar kelompok",
+                    "Melihat hubungan antar variabel",
+                    "Memprediksi variabel hasil",
+                    "Menguji kuesioner/skala",
+                    "Menganalisis data kategori",
+                    "Eksplorasi awal/deskriptif",
+                ],
+                key="wizard_objective",
+            )
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                y_sel = st.selectbox("Variabel hasil / Y / skor", [None] + all_cols, format_func=lambda x: "— pilih —" if x is None else str(x), key="wizard_y")
+            with col_b:
+                x_sel = st.selectbox("Variabel X / prediktor / pembanding", [None] + all_cols, format_func=lambda x: "— pilih —" if x is None else str(x), key="wizard_x")
+            with col_c:
+                group_sel = st.selectbox("Variabel grup/kategori", [None] + all_cols, format_func=lambda x: "— pilih —" if x is None else str(x), key="wizard_group")
+
+            type_rows = pd.DataFrame([
+                {"Pilihan": "Y/skor", "Kolom": y_sel or "-", "Tipe terbaca": classify_variable(df, y_sel) if y_sel else "-"},
+                {"Pilihan": "X/prediktor", "Kolom": x_sel or "-", "Tipe terbaca": classify_variable(df, x_sel) if x_sel else "-"},
+                {"Pilihan": "Grup", "Kolom": group_sel or "-", "Tipe terbaca": classify_variable(df, group_sel) if group_sel else "-"},
+            ])
+            st.dataframe(type_rows, use_container_width=True, hide_index=True)
+
+            rec = smart_test_recommendation(df, objective, y=y_sel, x=x_sel, group=group_sel)
+            st.markdown("#### Rekomendasi uji")
+            st.dataframe(rec, use_container_width=True, hide_index=True)
+
+            effect_table = compute_quick_effect_sizes(df, y=y_sel, x=x_sel, group=group_sel)
+            if not effect_table.empty:
+                st.markdown("#### Effect size cepat dari variabel terpilih")
+                st.dataframe(effect_table, use_container_width=True, hide_index=True)
+                st.caption("Effect size membantu menjawab: hasil ini sekadar signifikan, atau benar-benar bermakna secara praktis?")
+
+            st.markdown("#### Checklist sebelum menjalankan uji")
+            if objective == "Membandingkan rata-rata antar kelompok":
+                checklist_name = "ANOVA" if group_sel and group_sel in df.columns and df[group_sel].dropna().nunique() >= 3 else "Independent T-Test"
+            elif objective == "Melihat hubungan antar variabel":
+                checklist_name = "Korelasi"
+            elif objective == "Memprediksi variabel hasil":
+                checklist_name = "Regresi Linear"
+            elif objective == "Menguji kuesioner/skala":
+                checklist_name = "Reliabilitas / Cronbach Alpha"
+            else:
+                checklist_name = "Deskriptif"
+            guide = analysis_specific_guidance(df, checklist_name)
+            st.dataframe(guide, use_container_width=True, hide_index=True)
+
+            if st.button("💾 Simpan rekomendasi wizard ke Output Viewer", key="save_wizard_recommendation"):
+                merged = pd.concat([rec, guide.rename(columns={"Checklist": "Uji/Analisis Disarankan", "Status": "Kondisi Data", "Apa yang perlu dilakukan": "Langkah Berikutnya"})], ignore_index=True, sort=False)
+                add_report("Rekomendasi Smart Wizard", merged, f"Tujuan: {objective}. Skor kesiapan data: {score_now}/100.")
+                st.success("Rekomendasi disimpan ke Output Viewer.")
+
+        elif mode == "Data Repair Assistant":
+            st.markdown("### 🛠️ Data Repair Assistant")
+            st.caption("Aplikasi mendeteksi masalah umum lalu menawarkan perbaikan satu klik. Data asli tetap ada di sesi sampai tombol diterapkan.")
+            actions = detect_repair_actions(df)
+            if actions.empty:
+                st.success("Tidak ditemukan tindakan perbaikan otomatis yang mendesak. Lanjutkan ke wizard atau analisis.")
+            else:
+                st.dataframe(actions.drop(columns=["Kode"]), use_container_width=True, hide_index=True)
+                st.warning("Saran aman: simpan file asli dulu. Perbaikan otomatis bagus untuk masalah format umum, tetapi tetap cek konteks riset.")
+                for _, row in actions.iterrows():
+                    action_code = row["Kode"]
+                    if st.button(f"Terapkan: {row['Tindakan']}", key=f"repair_{action_code}"):
+                        repaired, note = apply_repair_action(df, action_code)
+                        st.session_state.df = repaired
+                        st.session_state.metadata = build_metadata(repaired)
+                        log_syntax(f"SMART REPAIR /ACTION={action_code}.")
+                        add_report("Data Repair Assistant", pd.DataFrame([{"Aksi": action_code, "Catatan": note}]), note)
+                        st.success(note)
+                        st.rerun()
+
+            with st.expander("Preview profil kolom setelah/ sebelum perbaikan", expanded=False):
+                st.dataframe(_column_profile(df, st.session_state.metadata), use_container_width=True, hide_index=True)
+
+        elif mode == "Sample Size & Power":
+            st.markdown("### 📏 Sample Size & Power Calculator")
+            st.caption("Gunakan untuk proposal riset atau mengecek apakah sampel kira-kira memadai. Untuk desain kompleks, tetap konsultasikan metode statistik.")
+            test_type = st.selectbox(
+                "Jenis perhitungan",
+                ["Independent t-test", "One-sample t-test", "Paired t-test", "One-way ANOVA", "Correlation", "Multiple regression", "Survey proportion / margin of error"],
+                key="power_test_type",
+            )
+            p1, p2, p3, p4 = st.columns(4)
+            with p1:
+                alpha_power = st.number_input("Alpha", min_value=0.001, max_value=0.20, value=0.05, step=0.01, format="%.3f", key="power_alpha")
+            with p2:
+                target_power = st.number_input("Power", min_value=0.50, max_value=0.99, value=0.80, step=0.01, format="%.2f", key="power_value")
+            with p3:
+                es_default = 0.5 if test_type != "One-way ANOVA" else 0.25
+                es = st.number_input("Effect size", min_value=0.001, max_value=5.0, value=es_default, step=0.05, format="%.3f", key="power_effect")
+            with p4:
+                groups_or_pred = st.number_input("Jumlah grup/prediktor", min_value=1, max_value=50, value=3 if test_type == "One-way ANOVA" else 2, step=1, key="power_groups_pred")
+            r_val = None
+            moe_val = None
+            prop_val = 0.5
+            if test_type == "Correlation":
+                r_val = st.number_input("Target korelasi r", min_value=0.01, max_value=0.99, value=0.30, step=0.01, format="%.2f", key="power_r")
+            if test_type == "Survey proportion / margin of error":
+                moe_val = st.number_input("Margin of error", min_value=0.001, max_value=0.50, value=0.05, step=0.01, format="%.3f", key="power_moe")
+                prop_val = st.number_input("Proporsi awal p", min_value=0.01, max_value=0.99, value=0.50, step=0.01, format="%.2f", key="power_prop")
+            n_needed, unit, method = normal_power_sample_size(test_type, alpha_power, target_power, es, groups=groups_or_pred, predictors=groups_or_pred, r=r_val, moe=moe_val, proportion=prop_val)
+            if n_needed:
+                st.metric("Sampel minimal perkiraan", f"{n_needed:,} {unit}")
+                st.caption(method)
+                ss_table = pd.DataFrame([{"Jenis": test_type, "Alpha": alpha_power, "Power": target_power, "Effect size": es, "N minimal": n_needed, "Satuan": unit, "Metode": method}])
+                st.dataframe(ss_table, use_container_width=True, hide_index=True)
+                if st.button("💾 Simpan perhitungan sample size", key="save_power_calc"):
+                    add_report("Sample Size & Power Calculator", ss_table, method)
+                    st.success("Perhitungan disimpan ke Output Viewer.")
+            else:
+                st.error(method)
+            st.info("Panduan effect size cepat: Cohen's d 0.2 kecil, 0.5 sedang, 0.8 besar; r 0.1 kecil, 0.3 sedang, 0.5 besar; Cohen's f ANOVA 0.10 kecil, 0.25 sedang, 0.40 besar.")
+
+        elif mode == "Kalkulator Statistik":
+            st.markdown("### 🧮 Kalkulator Statistik Manual")
+            calc_mode = st.radio("Jenis kalkulator", ["Deskriptif dari daftar angka", "Distribusi & nilai kritis", "Z-score/T-score"], horizontal=True, key="calc_mode")
+            if calc_mode == "Deskriptif dari daftar angka":
+                numbers_text = st.text_area("Masukkan angka, pisahkan dengan koma/spasi/baris", "12, 15, 14, 18, 20, 17, 16", height=120, key="manual_numbers")
+                vals = parse_number_list(numbers_text)
+                desc_calc = descriptive_calculator_table(vals)
+                st.dataframe(desc_calc, use_container_width=True, hide_index=True)
+                if st.button("💾 Simpan hasil kalkulator deskriptif", key="save_desc_calc"):
+                    add_report("Kalkulator Deskriptif Manual", desc_calc, "Statistik deskriptif dari daftar angka manual.")
+                    st.success("Hasil disimpan ke Output Viewer.")
+            elif calc_mode == "Distribusi & nilai kritis":
+                d1, d2, d3, d4 = st.columns(4)
+                with d1:
+                    dist_name = st.selectbox("Distribusi", ["Normal/Z", "t", "Chi-square", "F", "Binomial", "Poisson"], key="dist_name")
+                with d2:
+                    dist_mode = st.selectbox("Hitung", ["P(X ≤ nilai)", "P(X ≥ nilai)", "Nilai kritis kanan/dua sisi"], key="dist_mode")
+                with d3:
+                    value_x = st.number_input("Nilai X", value=1.96, step=0.1, format="%.4f", key="dist_x")
+                with d4:
+                    alpha_dist = st.number_input("Alpha", min_value=0.001, max_value=0.50, value=0.05, step=0.01, format="%.3f", key="dist_alpha")
+                e1, e2, e3 = st.columns(3)
+                with e1:
+                    df1_val = st.number_input("df / df1", min_value=1, max_value=100000, value=10, step=1, key="dist_df1")
+                with e2:
+                    df2_val = st.number_input("df2", min_value=1, max_value=100000, value=20, step=1, key="dist_df2")
+                with e3:
+                    n_bin = st.number_input("n binomial", min_value=1, max_value=100000, value=20, step=1, key="dist_n")
+                f1, f2 = st.columns(2)
+                with f1:
+                    p_bin = st.number_input("p binomial", min_value=0.001, max_value=0.999, value=0.50, step=0.01, format="%.3f", key="dist_p")
+                with f2:
+                    lam_pois = st.number_input("lambda poisson", min_value=0.001, max_value=100000.0, value=3.0, step=0.5, format="%.3f", key="dist_lambda")
+                result = distribution_calculator(dist_name, dist_mode, value_x, df1=df1_val, df2=df2_val, n=n_bin, p=p_bin, lam=lam_pois, alpha=alpha_dist)
+                st.metric("Hasil", f"{result:.6f}" if pd.notna(result) else "NA")
+            else:
+                zc1, zc2, zc3 = st.columns(3)
+                with zc1:
+                    raw_x = st.number_input("Nilai X", value=75.0, step=1.0, key="z_x")
+                with zc2:
+                    mean_x = st.number_input("Mean", value=70.0, step=1.0, key="z_mean")
+                with zc3:
+                    sd_x = st.number_input("Std. deviasi", min_value=0.0001, value=10.0, step=1.0, key="z_sd")
+                z = (raw_x - mean_x) / sd_x
+                t_score = 50 + 10*z
+                pct = stats.norm.cdf(z) * 100
+                z_table = pd.DataFrame([{"X": raw_x, "Mean": mean_x, "SD": sd_x, "Z-score": z, "T-score": t_score, "Persentil approx": pct}])
+                st.dataframe(z_table, use_container_width=True, hide_index=True)
+
+        else:
+            st.markdown("### 📝 Template Narasi Laporan")
+            report_kind = st.selectbox("Jenis template", ["BAB 4 Skripsi/Tesis", "APA Style", "Ringkasan Manajerial"], key="report_template_kind")
+            research_title = st.text_input("Judul riset", value="", placeholder="Contoh: Pengaruh Motivasi Belajar terhadap Prestasi Siswa", key="research_title_input")
+            hypothesis = st.text_area("Pertanyaan/hipotesis riset", value="", placeholder="Contoh: Motivasi belajar berhubungan positif dengan prestasi siswa.", key="hypothesis_input")
+            output_titles = [item.get("title", f"Output {i+1}") for i, item in enumerate(st.session_state.report_items)]
+            selected_outputs = st.multiselect("Output yang ingin dijadikan dasar narasi", output_titles, default=output_titles[-3:] if output_titles else [], key="template_outputs")
+            template_md = build_report_template(report_kind, research_title, hypothesis, selected_outputs)
+            st.markdown(template_md)
+            st.download_button("⬇️ Download template narasi Markdown", template_md.encode("utf-8"), file_name="template_narasi_riset.md", mime="text/markdown", key="download_template_md")
+            if st.button("💾 Simpan template narasi ke Output Viewer", key="save_template_report"):
+                add_report("Template Narasi Laporan", pd.DataFrame([{"Jenis": report_kind, "Narasi": template_md}]), "Template narasi otomatis untuk membantu penyusunan laporan penelitian.")
+                st.success("Template narasi disimpan ke Output Viewer.")
+
+    except Exception as exc:
+        if _is_streamlit_control_exception(exc):
+            raise
+        st.error("Bagian 🧙 Smart Assistant mengalami kendala, tetapi aplikasi tetap berjalan.")
         st.exception(exc)
 
 elif active_section == '🔁 Transform':
@@ -3068,4 +3711,4 @@ with st.expander("📖 Catatan Metodologis"):
     )
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.8 · SPSS-like Research Insight Workflow</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.9 · Smart Statistical Assistant Workflow</p>", unsafe_allow_html=True)
