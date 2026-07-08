@@ -1869,6 +1869,79 @@ def suggest_compatible_analyses(df):
     return pd.DataFrame(rows)
 
 
+def suggest_analysis_table(df):
+    """Return quick-start analysis suggestions with stable column names.
+
+    v4.0/v4.1 memanggil helper ini dari halaman Mulai Cepat, tetapi
+    implementasi yang ikut terpaket adalah `suggest_compatible_analyses`.
+    Fungsi ini menjadi adaptor resmi: output-nya lebih ringkas untuk user
+    awam dan aman walau dataset kosong/kolom campuran.
+    """
+    try:
+        base = suggest_compatible_analyses(df)
+    except Exception as exc:
+        return pd.DataFrame([{
+            "Uji/Analisis": "Belum dapat memberi rekomendasi",
+            "Status": "⚠️ Perlu cek data",
+            "Data yang Dibutuhkan": "Dataset yang valid",
+            "Saran Variabel": "Periksa format file dan tipe kolom",
+            "Catatan Singkat": f"Rekomendasi gagal dibuat: {exc}",
+            "Menu yang Digunakan": "🧰 Kompatibilitas Data",
+        }])
+
+    if base is None or len(base) == 0:
+        return pd.DataFrame([{
+            "Uji/Analisis": "Deskriptif awal",
+            "Status": "ℹ️ Mulai dari data",
+            "Data yang Dibutuhkan": "Minimal 1 kolom data",
+            "Saran Variabel": "Upload atau input data terlebih dahulu",
+            "Catatan Singkat": "Setelah data tersedia, aplikasi akan menyarankan uji yang cocok.",
+            "Menu yang Digunakan": "📥 Input Data",
+        }])
+
+    rename_map = {
+        "Analisis": "Uji/Analisis",
+        "Kesiapan": "Status",
+        "Yang Dibutuhkan": "Data yang Dibutuhkan",
+        "Catatan untuk User Awam": "Catatan Singkat",
+    }
+    out = base.rename(columns=rename_map).copy()
+
+    # Lengkapi kolom yang mungkin belum ada agar UI/export tidak error.
+    for col in ["Uji/Analisis", "Status", "Data yang Dibutuhkan", "Saran Variabel", "Catatan Singkat"]:
+        if col not in out.columns:
+            out[col] = "-"
+
+    def _menu_for_analysis(name):
+        name = str(name).lower()
+        if any(k in name for k in ["deskriptif", "frekuensi"]):
+            return "📋 Deskriptif"
+        if any(k in name for k in ["korelasi", "t-test", "anova", "chi-square", "mann", "wilcoxon", "kruskal"]):
+            return "🧪 Uji Statistik / 🧙 Smart Assistant"
+        if "regresi" in name:
+            return "📈 Regresi"
+        if any(k in name for k in ["reliabilitas", "cronbach", "efa", "faktor", "pca"]):
+            return "🧭 Reliabilitas & Faktor"
+        return "🧙 Smart Assistant"
+
+    out["Menu yang Digunakan"] = out["Uji/Analisis"].apply(_menu_for_analysis)
+
+    # Urutkan supaya rekomendasi yang siap tampil dulu, lalu yang perlu disiapkan.
+    def _rank(status):
+        s = str(status).lower()
+        if "✅" in s or "siap" in s:
+            return 0
+        if "⚠" in s or "perlu" in s or "bisa" in s:
+            return 1
+        if "❌" in s or "belum" in s:
+            return 2
+        return 3
+
+    out["_rank"] = out["Status"].apply(_rank)
+    out = out.sort_values(["_rank", "Uji/Analisis"], kind="stable").drop(columns="_rank")
+    return out[["Uji/Analisis", "Status", "Data yang Dibutuhkan", "Saran Variabel", "Catatan Singkat", "Menu yang Digunakan"]].reset_index(drop=True)
+
+
 def analysis_specific_guidance(df, analysis_name):
     num = numeric_cols(df)
     cat = categorical_cols(df)

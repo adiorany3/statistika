@@ -1,4 +1,11 @@
-# Statistik Pro+ v4.1 — Comprehensive Guided Statistics Suite
+# Statistik Pro+ v4.2 — Comprehensive Guided Statistics Suite
+
+## Perbaikan v4.2
+
+- Memperbaiki error **NameError: suggest_analysis_table is not defined** pada halaman **🚀 Mulai Cepat**.
+- Menambahkan adaptor resmi `suggest_analysis_table()` yang memakai engine rekomendasi kompatibilitas analisis, lalu mengubahnya menjadi tabel ringkas untuk user awam.
+- Output rekomendasi kini stabil untuk tampilan UI dan ekspor Output Viewer.
+- Menambahkan fallback aman jika rekomendasi analisis gagal dihitung.
 
 Aplikasi statistik berbasis Streamlit yang dirancang sebagai alternatif alat hitung/statistika bergaya SPSS, tetapi tetap ramah untuk user awam.
 
