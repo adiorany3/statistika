@@ -1,6 +1,6 @@
-# 📊 Statistik Pro+ v3.5 — Alternatif SPSS berbasis Streamlit
+# 📊 Statistik Pro+ v3.6 — Alternatif SPSS berbasis Streamlit
 
-Statistik Pro+ v3.5 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
+Statistik Pro+ v3.6 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
 
 ## ✨ Fitur Utama
 
@@ -105,7 +105,7 @@ streamlit run app.py
 ## 📁 File dalam paket
 
 ```text
-statistik_pro_spss_v3_5/
+statistik_pro_spss_v3_6/
 ├── app.py
 ├── requirements.txt
 ├── README.md
@@ -126,7 +126,7 @@ Untuk laporan akademik, sebaiknya selalu laporkan statistik uji, derajat kebebas
 
 ---
 
-Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.5
+Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.6
 
 
 ## Catatan Versi 3.2
@@ -142,7 +142,7 @@ Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.5
 - Aplikasi tetap mencoba `factor-analyzer` terlebih dahulu pada mode otomatis, lalu berpindah ke fallback bila dependency bermasalah.
 
 
-## Catatan v3.5
+## Catatan v3.6
 
 - Menambahkan modul **Insight & Makna Riset**.
 - Aplikasi kini tidak hanya menampilkan angka statistik, tetapi juga membantu menyusun makna riset: temuan utama, hasil non-signifikan, asumsi, kualitas pengukuran, dan rekomendasi analisis lanjutan.
