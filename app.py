@@ -129,16 +129,22 @@ st.set_page_config(page_title=f"{APP_NAME} - Alternatif SPSS", page_icon="📊",
 # Streamlit stability patch
 # -----------------------------------------------------------------------------
 def _install_auto_widget_keys():
-    """Berikan key otomatis ke widget yang belum punya key.
+    """Berikan key otomatis yang stabil untuk widget Streamlit tanpa key eksplisit.
 
-    Pada aplikasi besar dengan banyak tab, Streamlit dapat membuat DuplicateWidgetID
-    saat widget di tab berbeda memiliki label/opsi yang mirip. Patch ini membuat key
-    stabil berbasis lokasi kode + label, sehingga perpindahan menu/tab tetap aman.
+    Catatan perbaikan v3.7:
+    - st.sidebar/st.columns/st.tabs memakai DeltaGenerator; argumen pertama method adalah
+      objek container, bukan label widget. Versi lama salah membaca ini sehingga beberapa
+      widget sidebar mendapat key yang sama.
+    - Wrapper dipasang ulang setiap rerun dengan mengembalikan fungsi asli via __wrapped__,
+      sehingga counter key selalu bersih per-run.
+    - Jika ada beberapa widget identik di baris yang sama, suffix counter ditambahkan secara
+      stabil berdasarkan urutan render pada run tersebut.
     """
     try:
         import functools
         import hashlib
         import inspect
+        from collections import defaultdict
         from streamlit.delta_generator import DeltaGenerator
 
         widget_names = [
@@ -148,39 +154,70 @@ def _install_auto_widget_keys():
             "color_picker", "form_submit_button",
         ]
 
-        def make_key(kind, args):
-            frame = inspect.currentframe()
-            caller = None
-            while frame is not None:
-                frame = frame.f_back
-                if frame is None:
-                    break
-                filename = frame.f_code.co_filename
-                if filename and filename.endswith("app.py"):
-                    caller = frame
-                    break
-            if caller is None:
-                caller = inspect.currentframe().f_back
-            label = ""
-            if args:
+        # Dibuat baru setiap script run supaya key stabil antar-rerun.
+        seen_this_run = defaultdict(int)
+        internal_names = {"make_key", "wrapped", "wrap_function", "_install_auto_widget_keys"}
+
+        def unwrap_auto(func):
+            """Ambil fungsi Streamlit asli dari wrapper lama, bila ada."""
+            original = getattr(func, "_statpro_auto_key_original", None)
+            if original is not None:
+                return original
+            # functools.wraps menyimpan fungsi asli di __wrapped__.
+            while getattr(func, "_statpro_auto_key_wrapped", False) and hasattr(func, "__wrapped__"):
+                func = func.__wrapped__
+            return func
+
+        def find_user_caller():
+            for frameinfo in inspect.stack(context=0):
+                filename = frameinfo.filename or ""
+                if not filename.endswith("app.py"):
+                    continue
+                if frameinfo.function in internal_names:
+                    continue
+                return frameinfo
+            return None
+
+        def get_widget_label(kind, args, kwargs):
+            if "label" in kwargs:
+                return str(kwargs.get("label", ""))[:160]
+            # Untuk DeltaGenerator method: args[0] adalah container/sidebar/column/tab,
+            # label widget biasanya args[1]. Untuk st.* top-level, label biasanya args[0].
+            offset = 1 if kind.startswith("dg.") else 0
+            if len(args) > offset:
                 try:
-                    label = str(args[0])[:120]
+                    return str(args[offset])[:160]
                 except Exception:
-                    label = ""
-            raw = f"{kind}|{caller.f_code.co_filename}|{caller.f_lineno}|{label}"
-            return "auto_" + hashlib.md5(raw.encode("utf-8", errors="ignore")).hexdigest()[:14]
+                    return ""
+            return ""
+
+        def make_key(kind, args, kwargs):
+            caller = find_user_caller()
+            if caller is None:
+                location = "unknown:0"
+                function = "unknown"
+            else:
+                location = f"{caller.filename}:{caller.lineno}"
+                function = caller.function
+
+            label = get_widget_label(kind, args, kwargs)
+            raw_base = f"{kind}|{location}|{function}|{label}"
+            seen_this_run[raw_base] += 1
+            occurrence = seen_this_run[raw_base]
+            raw = raw_base if occurrence == 1 else f"{raw_base}|occurrence={occurrence}"
+            return "auto_" + hashlib.md5(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
         def wrap_function(func, kind):
-            if getattr(func, "_statpro_auto_key_wrapped", False):
-                return func
+            original = unwrap_auto(func)
 
-            @functools.wraps(func)
+            @functools.wraps(original)
             def wrapped(*args, **kwargs):
                 if kwargs.get("key") is None:
-                    kwargs["key"] = make_key(kind, args)
-                return func(*args, **kwargs)
+                    kwargs["key"] = make_key(kind, args, kwargs)
+                return original(*args, **kwargs)
 
             wrapped._statpro_auto_key_wrapped = True
+            wrapped._statpro_auto_key_original = original
             return wrapped
 
         for name in widget_names:
@@ -2486,4 +2523,4 @@ with st.expander("📖 Catatan Metodologis"):
     )
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.6 · SPSS-like Research Insight Workflow</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.7 · SPSS-like Research Insight Workflow</p>", unsafe_allow_html=True)
