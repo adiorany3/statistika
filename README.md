@@ -1,6 +1,6 @@
-# 📊 Statistik Pro+ v3 — Alternatif SPSS berbasis Streamlit
+# 📊 Statistik Pro+ v3.3 — Alternatif SPSS berbasis Streamlit
 
-Statistik Pro+ v3 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
+Statistik Pro+ v3.3 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
 
 ## ✨ Fitur Utama
 
@@ -117,10 +117,17 @@ Untuk laporan akademik, sebaiknya selalu laporkan statistik uji, derajat kebebas
 
 ---
 
-Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3
+Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3.3
 
 
 ## Catatan Versi 3.2
 
 - Memperbaiki kompatibilitas EFA pada scikit-learn versi terbaru yang mengganti parameter `force_all_finite` menjadi `ensure_all_finite`.
 - EFA sekarang dipatch otomatis dari dalam aplikasi, sehingga tidak perlu downgrade scikit-learn.
+
+
+## Catatan v3.3
+
+- EFA kini memiliki **engine fallback stabil** tanpa `factor-analyzer`.
+- Jika terjadi konflik `force_all_finite` / `ensure_all_finite` pada scikit-learn terbaru, pilih menu **Engine EFA → Fallback stabil tanpa factor-analyzer**.
+- Aplikasi tetap mencoba `factor-analyzer` terlebih dahulu pada mode otomatis, lalu berpindah ke fallback bila dependency bermasalah.

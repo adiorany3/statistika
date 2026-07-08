@@ -33,34 +33,61 @@ except Exception:  # pragma: no cover
     variance_inflation_factor = None
     multipletests = None
 
-try:
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.decomposition import PCA
+def patch_sklearn_check_array_for_factor_analyzer():
+    """Patch kompatibilitas factor-analyzer dengan scikit-learn terbaru.
 
-    # Kompatibilitas scikit-learn >= 1.8 dengan factor-analyzer.
-    # factor-analyzer 0.5.x masih memanggil check_array(force_all_finite=...),
-    # sedangkan scikit-learn baru menggantinya menjadi ensure_all_finite=....
-    # Patch ini menjaga EFA tetap jalan tanpa harus downgrade scikit-learn.
+    factor-analyzer 0.5.x masih dapat memanggil check_array(force_all_finite=...),
+    sementara scikit-learn baru memakai ensure_all_finite=.... Patch ini dipasang
+    di sklearn.utils.validation, sklearn.utils, dan referensi internal factor_analyzer
+    jika modulnya sudah terlanjur di-import.
+    """
     try:
         import inspect
+        import sklearn.utils as _sk_utils
         import sklearn.utils.validation as _sk_validation
 
-        _original_check_array = _sk_validation.check_array
-        _params = inspect.signature(_original_check_array).parameters
-        if "force_all_finite" not in _params and "ensure_all_finite" in _params:
+        current = _sk_validation.check_array
+        original = getattr(current, "_statpro_original_check_array", current)
+        params = inspect.signature(original).parameters
+
+        if "force_all_finite" not in params and "ensure_all_finite" in params:
             def _check_array_compat(*args, force_all_finite=None, ensure_all_finite=None, **kwargs):
                 if ensure_all_finite is None and force_all_finite is not None:
                     ensure_all_finite = force_all_finite
                 if ensure_all_finite is not None:
                     kwargs["ensure_all_finite"] = ensure_all_finite
-                return _original_check_array(*args, **kwargs)
+                return original(*args, **kwargs)
 
+            _check_array_compat._statpro_original_check_array = original
             _sk_validation.check_array = _check_array_compat
+            _sk_utils.check_array = _check_array_compat
+
+            # Jika factor_analyzer sudah meng-cache check_array saat import, ganti juga.
+            try:
+                import factor_analyzer.factor_analyzer as _fa_module
+                if hasattr(_fa_module, "check_array"):
+                    _fa_module.check_array = _check_array_compat
+            except Exception:
+                pass
+            try:
+                import factor_analyzer.utils as _fa_utils
+                if hasattr(_fa_utils, "check_array"):
+                    _fa_utils.check_array = _check_array_compat
+            except Exception:
+                pass
+        return True
     except Exception:
-        pass
+        return False
+
+
+try:
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.decomposition import PCA, FactorAnalysis
+    patch_sklearn_check_array_for_factor_analyzer()
 except Exception:  # pragma: no cover
     StandardScaler = None
     PCA = None
+    FactorAnalysis = None
 
 try:
     import pyreadstat
@@ -78,7 +105,9 @@ except Exception:  # pragma: no cover
     pg = None
 
 try:
+    patch_sklearn_check_array_for_factor_analyzer()
     from factor_analyzer import FactorAnalyzer, calculate_bartlett_sphericity, calculate_kmo
+    patch_sklearn_check_array_for_factor_analyzer()
 except Exception:  # pragma: no cover
     FactorAnalyzer = None
     calculate_bartlett_sphericity = None
@@ -378,6 +407,153 @@ def df_to_markdown_safe(df: pd.DataFrame) -> str:
             lines.append("| " + " | ".join(fmt(v) for v in row) + " |")
         return "\n".join(lines)
 
+
+
+def calculate_kmo_bartlett_safe(data: pd.DataFrame):
+    """Hitung KMO dan Bartlett dengan fallback manual bila factor-analyzer bermasalah."""
+    x = data.apply(pd.to_numeric, errors="coerce").dropna()
+    if x.shape[0] < 3 or x.shape[1] < 2:
+        return np.nan, np.nan, np.nan
+
+    # Coba fungsi resmi factor-analyzer lebih dulu.
+    if calculate_bartlett_sphericity is not None and calculate_kmo is not None:
+        try:
+            patch_sklearn_check_array_for_factor_analyzer()
+            chi_square_value, bartlett_p = calculate_bartlett_sphericity(x)
+            _, kmo_model = calculate_kmo(x)
+            return float(kmo_model), float(chi_square_value), float(bartlett_p)
+        except Exception:
+            pass
+
+    # Fallback manual: berbasis correlation matrix.
+    arr = x.to_numpy(dtype=float)
+    n, p = arr.shape
+    corr = np.corrcoef(arr, rowvar=False)
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 1.0)
+
+    det_corr = float(np.linalg.det(corr))
+    det_corr = max(det_corr, np.finfo(float).eps)
+    bartlett_chi = -(n - 1 - ((2 * p + 5) / 6)) * np.log(det_corr)
+    bartlett_df = p * (p - 1) / 2
+    bartlett_p = stats.chi2.sf(bartlett_chi, bartlett_df)
+
+    inv_corr = np.linalg.pinv(corr)
+    denom = np.sqrt(np.outer(np.diag(inv_corr), np.diag(inv_corr)))
+    partial = -inv_corr / denom
+    partial = np.nan_to_num(partial, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 0.0)
+    np.fill_diagonal(partial, 0.0)
+    corr_sq = corr ** 2
+    partial_sq = partial ** 2
+    kmo_model = corr_sq.sum() / (corr_sq.sum() + partial_sq.sum()) if (corr_sq.sum() + partial_sq.sum()) else np.nan
+    return float(kmo_model), float(bartlett_chi), float(bartlett_p)
+
+
+def varimax_rotation(loadings, gamma=1.0, q=50, tol=1e-6):
+    """Rotasi varimax ringan untuk fallback EFA/PCA."""
+    loadings = np.asarray(loadings, dtype=float)
+    p, k = loadings.shape
+    rotation_matrix = np.eye(k)
+    previous = 0
+    for _ in range(q):
+        rotated = loadings @ rotation_matrix
+        u, s, vh = np.linalg.svd(
+            loadings.T @ (rotated ** 3 - (gamma / p) * rotated @ np.diag(np.diag(rotated.T @ rotated)))
+        )
+        rotation_matrix = u @ vh
+        current = s.sum()
+        if previous != 0 and current < previous * (1 + tol):
+            break
+        previous = current
+    return loadings @ rotation_matrix
+
+
+def efa_fallback_from_correlation(data: pd.DataFrame, columns, n_factors: int, rotation):
+    """Fallback EFA tanpa factor-analyzer: extraction dari eigen correlation matrix.
+
+    Ini bukan pengganti penuh maximum-likelihood/minres EFA, tetapi menjaga aplikasi tetap
+    memberi output factor loading yang dapat dipakai untuk eksplorasi saat dependency eksternal
+    konflik dengan scikit-learn terbaru.
+    """
+    if StandardScaler is None:
+        raise RuntimeError("scikit-learn belum tersedia untuk fallback EFA.")
+    x = data[columns].apply(pd.to_numeric, errors="coerce").dropna()
+    if x.shape[0] < 5:
+        raise RuntimeError("EFA sebaiknya memiliki minimal 5 baris lengkap; idealnya jauh lebih besar.")
+    max_components = min(n_factors, x.shape[1] - 1, x.shape[0] - 1)
+    if max_components < 1:
+        raise RuntimeError("Jumlah faktor tidak valid untuk data yang dipilih.")
+    z = StandardScaler().fit_transform(x)
+    corr = np.corrcoef(z, rowvar=False)
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 1.0)
+    eigenvalues, eigenvectors = np.linalg.eigh(corr)
+    order = np.argsort(eigenvalues)[::-1]
+    eigenvalues = np.maximum(eigenvalues[order], 0)
+    eigenvectors = eigenvectors[:, order]
+    loadings_arr = eigenvectors[:, :max_components] * np.sqrt(eigenvalues[:max_components])
+    rotation_used = "none"
+    if rotation in ["varimax", "promax", "oblimin"] and max_components > 1:
+        loadings_arr = varimax_rotation(loadings_arr)
+        rotation_used = "varimax"
+    elif rotation is None:
+        rotation_used = "none"
+
+    factor_names = [f"Factor {i+1}" for i in range(max_components)]
+    loadings = pd.DataFrame(loadings_arr, index=columns, columns=factor_names).reset_index(names="Variable").round(5)
+    ss_loadings = np.sum(loadings_arr ** 2, axis=0)
+    prop_var = ss_loadings / len(columns)
+    variance = pd.DataFrame(
+        [ss_loadings, prop_var, np.cumsum(prop_var)],
+        index=["SS Loadings", "Proportion Var", "Cumulative Var"],
+        columns=factor_names,
+    ).reset_index(names="Metric").round(5)
+    communalities = pd.DataFrame(
+        {"Variable": columns, "Communality": np.sum(loadings_arr ** 2, axis=1)}
+    ).round(5)
+    note = (
+        "Fallback EFA digunakan karena factor-analyzer tidak tersedia/berkonflik. "
+        f"Extraction berbasis eigen correlation matrix; rotasi yang dipakai: {rotation_used}."
+    )
+    return loadings, variance, communalities, note
+
+
+def run_efa_analysis(data: pd.DataFrame, columns, n_factors: int, rotation, prefer_fallback=False):
+    """Jalankan EFA robust: factor-analyzer jika bisa, fallback jika gagal."""
+    x = data[columns].apply(pd.to_numeric, errors="coerce").dropna()
+    if x.shape[0] < 5:
+        raise RuntimeError("EFA sebaiknya memiliki minimal 5 baris lengkap; idealnya jauh lebih besar.")
+
+    kmo_model, bartlett_chi, bartlett_p = calculate_kmo_bartlett_safe(x)
+    kmo_table = pd.DataFrame([
+        {"KMO": kmo_model, "Bartlett Chi-square": bartlett_chi, "Bartlett p-value": bartlett_p}
+    ]).round(5)
+
+    if not prefer_fallback and FactorAnalyzer is not None:
+        try:
+            patch_sklearn_check_array_for_factor_analyzer()
+            fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation)
+            fa.fit(x)
+            factor_names = [f"Factor {i+1}" for i in range(n_factors)]
+            loadings = pd.DataFrame(fa.loadings_, index=columns, columns=factor_names).reset_index(names="Variable").round(5)
+            variance = pd.DataFrame(
+                fa.get_factor_variance(),
+                index=["SS Loadings", "Proportion Var", "Cumulative Var"],
+                columns=factor_names,
+            ).reset_index(names="Metric").round(5)
+            communalities = pd.DataFrame({"Variable": columns, "Communality": fa.get_communalities()}).round(5)
+            return kmo_table, loadings, variance, communalities, "EFA dihitung dengan factor-analyzer."
+        except TypeError as exc:
+            msg = str(exc)
+            if "force_all_finite" not in msg and "ensure_all_finite" not in msg:
+                raise
+        except Exception as exc:
+            # Jika penyebabnya dependency, fallback; selain itu fallback juga aman untuk menjaga UI tidak crash.
+            fallback_reason = str(exc)
+
+    loadings, variance, communalities, note = efa_fallback_from_correlation(x, columns, n_factors, rotation)
+    return kmo_table, loadings, variance, communalities, note
 
 def report_as_markdown(report_items):
     lines = [f"# Output Statistik Pro+", "", f"Dibuat: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
@@ -1526,10 +1702,14 @@ with tab_reliability:
         n_factors = 1
         st.info("Pilih minimal 2 variabel numerik untuk EFA.")
     rotation = st.selectbox("Rotasi", ["varimax", "promax", "oblimin", None], index=0)
+    efa_engine = st.selectbox(
+        "Engine EFA",
+        ["Otomatis: factor-analyzer lalu fallback", "Fallback stabil tanpa factor-analyzer"],
+        index=0,
+        help="Pilih fallback stabil jika factor-analyzer masih bentrok dengan versi scikit-learn di komputer Anda.",
+    )
     if st.button("Jalankan EFA"):
-        if FactorAnalyzer is None:
-            st.error("factor-analyzer belum tersedia. Jalankan `pip install factor-analyzer`.")
-        elif len(efa_cols) < 2:
+        if len(efa_cols) < 2:
             st.error("Pilih minimal 2 variabel.")
         else:
             data = df[efa_cols].apply(pd.to_numeric, errors="coerce").dropna()
@@ -1537,29 +1717,21 @@ with tab_reliability:
                 st.error("EFA sebaiknya memiliki minimal 5 baris lengkap; idealnya jauh lebih besar.")
             else:
                 try:
-                    chi_square_value, bartlett_p = calculate_bartlett_sphericity(data)
-                    kmo_all, kmo_model = calculate_kmo(data)
-                    show_table("KMO & Bartlett's Test", pd.DataFrame([{"KMO": kmo_model, "Bartlett Chi-square": chi_square_value, "Bartlett p-value": bartlett_p}]).round(5))
-                    fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation)
-                    fa.fit(data)
-                    loadings = pd.DataFrame(fa.loadings_, index=efa_cols, columns=[f"Factor {i+1}" for i in range(n_factors)]).reset_index(names="Variable").round(5)
-                    variance = pd.DataFrame(
-                        fa.get_factor_variance(),
-                        index=["SS Loadings", "Proportion Var", "Cumulative Var"],
-                        columns=[f"Factor {i+1}" for i in range(n_factors)],
-                    ).reset_index(names="Metric").round(5)
-                    communalities = pd.DataFrame({"Variable": efa_cols, "Communality": fa.get_communalities()}).round(5)
+                    prefer_fallback = efa_engine.startswith("Fallback")
+                    kmo_table, loadings, variance, communalities, efa_note = run_efa_analysis(
+                        df, efa_cols, n_factors, rotation, prefer_fallback=prefer_fallback
+                    )
+                    show_table("KMO & Bartlett's Test", kmo_table)
                     show_table("EFA Factor Loadings", loadings)
                     show_table("EFA Variance Explained", variance)
                     show_table("EFA Communalities", communalities)
-                except TypeError as exc:
-                    msg = str(exc)
-                    if "force_all_finite" in msg or "ensure_all_finite" in msg:
-                        st.error("EFA gagal karena konflik kompatibilitas factor-analyzer dan scikit-learn. Versi aplikasi ini sudah menyertakan patch kompatibilitas; pastikan menjalankan ZIP revisi terbaru, lalu restart Streamlit.")
+                    if "Fallback" in efa_note:
+                        st.warning(efa_note)
                     else:
-                        st.error(f"EFA gagal dihitung: {exc}")
+                        st.success(efa_note)
                 except Exception as exc:
                     st.error(f"EFA gagal dihitung: {exc}")
+                    st.info("Coba pilih Engine EFA: `Fallback stabil tanpa factor-analyzer`, lalu jalankan ulang.")
 
 with tab_visual:
     st.subheader("🎨 Visualisasi")
