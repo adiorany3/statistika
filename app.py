@@ -4521,9 +4521,16 @@ Komponen dapat diberi nama berdasarkan variabel dengan loading tertinggi. Hasil 
 
         st.markdown("### Exploratory Factor Analysis (EFA)")
         efa_cols = st.multiselect("Variabel EFA", num_cols, default=[c for c in num_cols if c.lower().startswith("item")][:6], key="efa_cols")
+        # Streamlit slider membutuhkan min_value < max_value.
+        # Untuk 2 variabel, jumlah faktor maksimum yang valid hanya 1,
+        # jadi jangan memakai slider karena min=1 dan max=1 akan membuat aplikasi crash.
         if len(efa_cols) >= 2:
             max_factors = max(1, min(len(efa_cols) - 1, 8))
-            n_factors = st.slider("Jumlah faktor", 1, max_factors, min(2, max_factors), key="n_factors")
+            if max_factors >= 2:
+                n_factors = st.slider("Jumlah faktor", 1, max_factors, min(2, max_factors), key="n_factors")
+            else:
+                n_factors = 1
+                st.info("Dengan 2 variabel, EFA hanya dapat mengekstraksi 1 faktor. Tambahkan minimal 3 variabel jika ingin memilih lebih dari 1 faktor.")
         else:
             n_factors = 1
             st.info("Pilih minimal 2 variabel numerik untuk EFA.")
@@ -4544,8 +4551,9 @@ Komponen dapat diberi nama berdasarkan variabel dengan loading tertinggi. Hasil 
                 else:
                     try:
                         prefer_fallback = efa_engine.startswith("Fallback")
+                        safe_n_factors = max(1, min(int(n_factors), max(1, min(len(efa_cols) - 1, len(data) - 1, 8))))
                         kmo_table, loadings, variance, communalities, eigen_table, efa_note = run_efa_analysis(
-                            df, efa_cols, n_factors, rotation, prefer_fallback=prefer_fallback
+                            df, efa_cols, safe_n_factors, rotation, prefer_fallback=prefer_fallback
                         )
                         show_table("KMO & Bartlett's Test", kmo_table)
                         show_table("EFA Factor Loadings", loadings)
