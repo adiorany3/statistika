@@ -1,0 +1,120 @@
+# 📊 Statistik Pro+ v3 — Alternatif SPSS berbasis Streamlit
+
+Statistik Pro+ v3 adalah aplikasi statistik interaktif berbasis Streamlit yang dirancang sebagai alternatif ringan dari SPSS untuk kebutuhan analisis data, penelitian kuantitatif, skripsi/tesis, survei, dan laporan statistik.
+
+## ✨ Fitur Utama
+
+### 1. Data View & Variable View
+- Import data dari CSV, Excel, dan SPSS `.sav`
+- Data editor interaktif
+- Variable View ala SPSS:
+  - nama variabel
+  - label variabel
+  - tipe data
+  - measurement level: Nominal, Ordinal, Scale
+  - role variabel
+  - value labels, contoh: `1=Laki-laki; 2=Perempuan`
+  - user-missing values, contoh: `99, 999`
+
+### 2. Transformasi Data
+- Compute variable
+- Recode into different variable
+- Reverse coding item Likert
+- Standardize / Z-score
+- Filter / select cases
+- Split file untuk workflow output
+- Rename dan drop variables
+- Syntax / audit trail sederhana
+
+### 3. Statistik Deskriptif
+- Mean, median, standar deviasi, min, max
+- Skewness dan kurtosis
+- Tabel frekuensi
+- Explore by group
+- Uji normalitas Shapiro-Wilk / D'Agostino
+
+### 4. Uji Statistik
+- One-Sample T-Test
+- Independent T-Test, wide dan long format
+- Paired T-Test
+- One-Way ANOVA
+- Two-Way ANOVA
+- Tukey HSD post-hoc
+- Korelasi Pearson, Spearman, Kendall
+- Crosstab dan Chi-Square
+- Mann-Whitney U
+- Wilcoxon Signed-Rank
+- Kruskal-Wallis + Dunn post-hoc jika dependency tersedia
+- Friedman Test
+- Uji asumsi: normalitas, Levene, outlier sederhana
+
+### 5. Regresi
+- Regresi linear berganda
+- Regresi logistik biner
+- Koefisien, CI, p-value, odds ratio
+- VIF multikolinearitas
+- Diagnostik residual:
+  - Jarque-Bera
+  - Durbin-Watson
+  - Breusch-Pagan
+
+### 6. Reliabilitas, PCA, dan Faktor
+- Cronbach’s Alpha
+- Corrected item-total correlation
+- Alpha if item deleted
+- PCA explained variance dan component loadings
+- Exploratory Factor Analysis / EFA
+- KMO dan Bartlett’s Test
+- Factor loadings, communalities, variance explained
+
+### 7. Visualisasi
+- Histogram
+- Box plot
+- Scatter plot + trendline OLS
+- Bar chart
+- Correlation heatmap
+- Q-Q plot
+
+### 8. Output Viewer & Ekspor
+- Output analisis tersimpan seperti Output Viewer sederhana
+- Interpretasi otomatis berbasis p-value/effect/model summary
+- Ekspor:
+  - CSV
+  - Excel data + output
+  - Markdown report
+  - HTML report
+  - Word `.docx`
+  - Syntax log `.sps`
+
+## 🚀 Cara Menjalankan
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## 📁 File dalam paket
+
+```text
+statistik_pro_spss_v3/
+├── app.py
+├── requirements.txt
+├── README.md
+├── sample_data.csv
+└── .streamlit/
+    └── config.toml
+```
+
+## 🧪 Data Contoh
+
+Aplikasi menyertakan `sample_data.csv` dan juga tombol **Data Contoh** di sidebar. Data contoh berisi variabel kelompok, gender, kecemasan, motivasi, nilai akhir, status lulus, dan item kuesioner Likert.
+
+## ⚠️ Catatan Metodologis
+
+Aplikasi ini membantu mempercepat analisis statistik, tetapi interpretasi akhir tetap perlu mempertimbangkan desain penelitian, kualitas data, ukuran sampel, skala pengukuran, dan asumsi statistik yang relevan.
+
+Untuk laporan akademik, sebaiknya selalu laporkan statistik uji, derajat kebebasan, p-value, confidence interval, effect size, dan hasil uji asumsi.
+
+---
+
+Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v3
