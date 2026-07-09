@@ -514,7 +514,16 @@ Prinsip penting v5.0:
 - Untuk fitur advanced, lebih baik tampilkan pesan ramah + saran perbaikan daripada crash.
 
 
-## v5.1 Update
+## v5.2 Update
 - Footer dibuat lebih permanen menggunakan fixed bottom bar `.statpro-footer-fixed`.
 - Ditambahkan backup footer di sidebar dan spacer bawah agar konten tidak tertutup.
 - Tujuan: credit `Developed by Galuh Adi Insani` tidak hilang saat rerun, scroll panjang, atau navigasi menu.
+
+
+## Update v5.2 — Clean Footer & Unequal N Support
+
+- Credit di sidebar dihapus sesuai permintaan; credit tetap ada sebagai fixed bottom footer.
+- Ditambahkan dukungan eksplisit untuk data dengan jumlah observasi antar grup tidak sama (unequal N).
+- Independent t-test sekarang menampilkan Student/Welch, status N, Levene p-value, dan saran otomatis. Default UI tetap mendorong Welch/equal_var=False untuk kasus unequal N.
+- One-Way ANOVA menampilkan status N, Levene p-value, ringkasan N per grup, Welch ANOVA, serta Games-Howell post-hoc bila pingouin tersedia.
+- Prinsip interpretasi: unequal N tidak otomatis salah; pilih metode sesuai asumsi varians, normalitas, dan desain penelitian.

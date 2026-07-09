@@ -298,8 +298,8 @@ st.markdown(
 )
 
 
-APP_VERSION = "v5.1"
-FOOTER_TEXT = "Developed by Galuh Adi Insani · Statistik Pro+ v5.1 · Research Analytics Suite"
+APP_VERSION = "v5.2"
+FOOTER_TEXT = "Developed by Galuh Adi Insani · Statistik Pro+ v5.2 · Research Analytics Suite"
 
 
 def render_persistent_footer():
@@ -314,21 +314,6 @@ def render_persistent_footer():
     )
 
 
-def render_sidebar_footer():
-    """Footer cadangan di sidebar supaya credit tetap terlihat saat fixed bar tertutup browser/mobile."""
-    try:
-        st.sidebar.markdown(
-            f"""
-            <div class="statpro-sidebar-footer">
-                <strong>Developed by Galuh Adi Insani</strong><br/>
-                Statistik Pro+ {APP_VERSION}<br/>
-                Research Analytics Suite
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        pass
 
 
 # Render sejak awal agar footer tetap muncul meskipun menu tertentu mengalami error lokal.
@@ -1472,30 +1457,163 @@ def one_sample_ttest(s, mu, alpha):
     ).round(5)
 
 
+def unequal_n_label(ns):
+    """Ringkasan sederhana untuk kondisi jumlah data per grup yang tidak sama."""
+    ns = [int(n) for n in ns if pd.notna(n)]
+    if not ns or min(ns) <= 0:
+        return "Tidak dapat dinilai"
+    if len(set(ns)) == 1:
+        return "Seimbang"
+    ratio = max(ns) / max(1, min(ns))
+    if ratio < 1.5:
+        return "Unequal ringan"
+    if ratio < 3:
+        return "Unequal sedang"
+    return "Unequal kuat"
+
+
+def unequal_n_recommendation(ns, analysis="t-test", levene_p=None):
+    """Saran praktis saat ukuran sampel/observasi antar grup tidak sama."""
+    ns = [int(n) for n in ns if pd.notna(n)]
+    if not ns or min(ns) <= 0:
+        return "Data belum cukup untuk menilai kesetaraan jumlah observasi."
+    if len(set(ns)) == 1:
+        return "Jumlah observasi antar grup seimbang. Lanjutkan dengan tetap memeriksa asumsi normalitas dan homogenitas varians."
+
+    ratio = max(ns) / max(1, min(ns))
+    homogeneity_bad = levene_p is not None and pd.notna(levene_p) and levene_p < 0.05
+
+    if analysis.lower().startswith("t"):
+        if homogeneity_bad or ratio >= 1.5:
+            return "Jumlah data antar grup tidak sama. Gunakan Welch t-test/equal_var=False sebagai pilihan utama; Mann-Whitney dapat dipakai bila data sangat tidak normal atau ordinal."
+        return "Jumlah data antar grup tidak sama, tetapi perbedaannya ringan. Student t-test masih mungkin jika varians homogen; Welch t-test tetap lebih aman."
+
+    if "anova" in analysis.lower():
+        if homogeneity_bad or ratio >= 1.5:
+            return "Jumlah data antar grup tidak sama. ANOVA biasa masih bisa menghitung, tetapi Welch ANOVA lebih aman bila varians tidak homogen; gunakan Games-Howell atau Kruskal-Wallis + Dunn untuk alternatif/post-hoc."
+        return "Jumlah data antar grup tidak sama secara ringan. ANOVA biasa masih dapat digunakan jika varians homogen dan distribusi wajar; tetap laporkan ukuran grup."
+
+    return "Jumlah observasi tidak sama. Pilih metode yang toleran terhadap unequal N, cek asumsi, dan laporkan N setiap grup."
+
+
+def group_size_summary(groups, original_lengths=None):
+    """Buat tabel N valid, missing, dan status unequal untuk daftar grup."""
+    rows = []
+    ns = []
+    for idx, (label, values) in enumerate(groups.items()):
+        ser = pd.Series(values)
+        n_valid = int(ser.dropna().shape[0])
+        original_n = int(original_lengths.get(label, len(ser))) if isinstance(original_lengths, dict) else int(len(ser))
+        ns.append(n_valid)
+        rows.append({
+            "Grup": str(label),
+            "N Valid": n_valid,
+            "Missing": max(0, original_n - n_valid),
+            "Mean": safe_numeric(ser).dropna().mean() if n_valid else np.nan,
+            "SD": safe_numeric(ser).dropna().std(ddof=1) if n_valid > 1 else np.nan,
+        })
+    status = unequal_n_label(ns)
+    ratio = max(ns) / max(1, min(ns)) if ns and min(ns) > 0 else np.nan
+    out = pd.DataFrame(rows)
+    out["Status N"] = status
+    out["Rasio Max/Min N"] = round(ratio, 3) if pd.notna(ratio) else np.nan
+    return out.round(5)
+
+
+def safe_levene(*samples):
+    """Levene test defensif untuk homogenitas varians."""
+    try:
+        cleaned = [pd.Series(s).dropna().astype(float) for s in samples]
+        if len(cleaned) < 2 or any(len(x) < 2 for x in cleaned):
+            return np.nan
+        if any(x.var(ddof=1) == 0 for x in cleaned):
+            return np.nan
+        return float(stats.levene(*cleaned, center="median").pvalue)
+    except Exception:
+        return np.nan
+
+
+def welch_anova_from_groups(groups, alpha=0.05):
+    """Welch ANOVA manual untuk grup dengan ukuran/varians tidak sama."""
+    cleaned = {str(k): pd.Series(v).dropna().astype(float) for k, v in groups.items()}
+    cleaned = {k: v for k, v in cleaned.items() if len(v) >= 2 and v.var(ddof=1) > 0}
+    k = len(cleaned)
+    if k < 2:
+        return pd.DataFrame({"Pesan": ["Welch ANOVA membutuhkan minimal 2 grup dengan N ≥ 2 dan varians > 0."]})
+    n = np.array([len(v) for v in cleaned.values()], dtype=float)
+    means = np.array([v.mean() for v in cleaned.values()], dtype=float)
+    variances = np.array([v.var(ddof=1) for v in cleaned.values()], dtype=float)
+    w = n / variances
+    w_sum = w.sum()
+    mean_w = (w * means).sum() / w_sum
+    df1 = k - 1
+    numerator = (w * (means - mean_w) ** 2).sum() / df1
+    correction_terms = ((1 - (w / w_sum)) ** 2) / (n - 1)
+    correction = 1 + (2 * (k - 2) / (k**2 - 1)) * correction_terms.sum() if k > 2 else 1
+    f_value = numerator / correction
+    df2 = (k**2 - 1) / (3 * correction_terms.sum()) if correction_terms.sum() > 0 else np.nan
+    p_value = stats.f.sf(f_value, df1, df2) if pd.notna(df2) else np.nan
+    return pd.DataFrame([{
+        "Metode": "Welch ANOVA",
+        "F": f_value,
+        "df1": df1,
+        "df2": df2,
+        "p-value": p_value,
+        "Keputusan": decision_text(p_value, alpha) if pd.notna(p_value) else "Tidak dapat dihitung",
+        "Catatan": "Direkomendasikan saat N/varians antar grup tidak sama.",
+    }]).round(5)
+
+
+def games_howell_table(long_df, alpha=0.05):
+    """Post-hoc Games-Howell jika pingouin tersedia; fallback pesan ramah jika tidak."""
+    if pg is None:
+        return pd.DataFrame({"Pesan": ["Games-Howell membutuhkan package pingouin. Jalankan pip install -r requirements.txt."]})
+    try:
+        work = long_df[["nilai", "grup"]].dropna().copy()
+        if work["grup"].nunique() < 2:
+            return pd.DataFrame({"Pesan": ["Minimal 2 grup diperlukan."]})
+        res = pg.pairwise_gameshowell(dv="nilai", between="grup", data=work)
+        if "pval" in res.columns:
+            res["Keputusan"] = np.where(res["pval"] < alpha, "Signifikan", "Tidak signifikan")
+        return res.round(5)
+    except Exception as exc:
+        return pd.DataFrame({"Pesan": [f"Games-Howell gagal dihitung: {exc}"]})
+
+
 def independent_ttest(s1, s2, label1, label2, alpha, equal_var=True):
     s1, s2 = s1.dropna(), s2.dropna()
+    if len(s1) < 2 or len(s2) < 2:
+        return pd.DataFrame({"Pesan": ["Setiap grup membutuhkan minimal 2 data valid untuk independent t-test."]})
+    levene_p = safe_levene(s1, s2)
     t_stat, p = stats.ttest_ind(s1, s2, equal_var=equal_var)
     if equal_var:
         df_val = len(s1) + len(s2) - 2
         pooled_sd = np.sqrt(((len(s1) - 1) * s1.var(ddof=1) + (len(s2) - 1) * s2.var(ddof=1)) / df_val)
         se_diff = pooled_sd * np.sqrt(1 / len(s1) + 1 / len(s2))
+        method = "Student t-test"
     else:
         v1, v2 = s1.var(ddof=1), s2.var(ddof=1)
         se_diff = np.sqrt(v1 / len(s1) + v2 / len(s2))
-        df_val = (v1 / len(s1) + v2 / len(s2)) ** 2 / ((v1 / len(s1)) ** 2 / (len(s1) - 1) + (v2 / len(s2)) ** 2 / (len(s2) - 1))
+        denom = ((v1 / len(s1)) ** 2 / (len(s1) - 1) + (v2 / len(s2)) ** 2 / (len(s2) - 1))
+        df_val = (v1 / len(s1) + v2 / len(s2)) ** 2 / denom if denom != 0 else np.nan
         pooled_sd = np.sqrt((s1.var(ddof=1) + s2.var(ddof=1)) / 2)
+        method = "Welch t-test"
     diff = s1.mean() - s2.mean()
-    ci = stats.t.interval(1 - alpha, df_val, loc=diff, scale=se_diff)
+    ci = stats.t.interval(1 - alpha, df_val, loc=diff, scale=se_diff) if pd.notna(df_val) else (np.nan, np.nan)
     d = diff / pooled_sd if pooled_sd != 0 else np.nan
+    ns = [len(s1), len(s2)]
     return pd.DataFrame(
         [
             {
+                "Metode": method,
                 "Grup 1": label1,
                 "N1": len(s1),
                 "Mean1": s1.mean(),
                 "Grup 2": label2,
                 "N2": len(s2),
                 "Mean2": s2.mean(),
+                "Status N": unequal_n_label(ns),
+                "Levene p": levene_p,
                 "Mean Difference": diff,
                 "t": t_stat,
                 "df": df_val,
@@ -1504,10 +1622,10 @@ def independent_ttest(s1, s2, label1, label2, alpha, equal_var=True):
                 f"CI Upper ({(1-alpha)*100:.0f}%)": ci[1],
                 "Cohen's d": d,
                 "Keputusan": decision_text(p, alpha),
+                "Saran jika N tidak sama": unequal_n_recommendation(ns, "t-test", levene_p),
             }
         ]
     ).round(5)
-
 
 def paired_ttest(s1, s2, label1, label2, alpha):
     pair = pd.concat([s1, s2], axis=1).dropna()
@@ -1551,6 +1669,8 @@ def anova_wide(df, cols, alpha):
     ms_within = ss_within / df_within
     eta_sq = ss_between / ss_total if ss_total > 0 else np.nan
     omega_sq = (ss_between - df_between * ms_within) / (ss_total + ms_within) if ss_total > 0 else np.nan
+    ns = [len(g) for g in data]
+    levene_p = safe_levene(*data)
     table = pd.DataFrame(
         [
             {"Sumber": "Between Groups", "SS": ss_between, "df": df_between, "MS": ms_between, "F": f, "p-value": p},
@@ -1558,7 +1678,14 @@ def anova_wide(df, cols, alpha):
             {"Sumber": "Total", "SS": ss_total, "df": n_total - 1, "MS": np.nan, "F": np.nan, "p-value": np.nan},
         ]
     ).round(5)
-    effects = pd.DataFrame([{"η²": eta_sq, "ω²": omega_sq, "Keputusan": decision_text(p, alpha)}]).round(5)
+    effects = pd.DataFrame([{
+        "η²": eta_sq,
+        "ω²": omega_sq,
+        "Status N": unequal_n_label(ns),
+        "Levene p": levene_p,
+        "Keputusan": decision_text(p, alpha),
+        "Saran jika N tidak sama": unequal_n_recommendation(ns, "anova", levene_p),
+    }]).round(5)
     long = pd.concat([pd.DataFrame({"nilai": safe_numeric(df[c]).dropna(), "grup": c}) for c in cols], ignore_index=True)
     return table, effects, long
 
@@ -4871,7 +4998,13 @@ elif active_section == '🧪 Uji Statistik':
                     else:
                         table, effects, long_for_posthoc = anova_wide(df, groups, alpha)
                         show_table("ANOVA Table", table)
-                        show_table("Effect Size", effects)
+                        show_table("Effect Size & Catatan Unequal N", effects)
+                        with st.expander("📏 Ukuran grup dan opsi jika jumlah data tidak sama", expanded=effects.iloc[0].get("Status N") != "Seimbang"):
+                            group_map = {g: safe_numeric(df[g]).dropna() for g in groups}
+                            show_table("Ringkasan N per Grup", group_size_summary(group_map), "ANOVA biasa dapat menghitung jumlah grup yang tidak sama, tetapi interpretasi perlu melihat homogenitas varians.")
+                            show_table("Welch ANOVA — alternatif aman untuk unequal N/varians", welch_anova_from_groups(group_map, alpha))
+                            if len(groups) > 2:
+                                show_table("Post-Hoc Games-Howell — alternatif Tukey saat varians/N tidak sama", games_howell_table(long_for_posthoc, alpha))
                         if effects.iloc[0]["Keputusan"].startswith("Signifikan") and len(groups) > 2:
                             show_table("Post-Hoc Tukey HSD", tukey_table(long_for_posthoc, alpha))
             else:
@@ -4883,7 +5016,13 @@ elif active_section == '🧪 Uji Statistik':
                     else:
                         table, effects, long_for_posthoc = anova_long(df, dv, grp, alpha)
                         show_table(f"ANOVA Table: {dv} berdasarkan {grp}", table)
-                        show_table("Effect Size", effects)
+                        show_table("Effect Size & Catatan Unequal N", effects)
+                        with st.expander("📏 Ukuran grup dan opsi jika jumlah data tidak sama", expanded=effects.iloc[0].get("Status N") != "Seimbang"):
+                            group_map = {str(level): safe_numeric(df.loc[df[grp].astype(str) == str(level), dv]).dropna() for level in df[grp].dropna().astype(str).unique().tolist()}
+                            show_table("Ringkasan N per Grup", group_size_summary(group_map), "ANOVA biasa dapat menghitung jumlah grup yang tidak sama, tetapi interpretasi perlu melihat homogenitas varians.")
+                            show_table("Welch ANOVA — alternatif aman untuk unequal N/varians", welch_anova_from_groups(group_map, alpha))
+                            if df[grp].nunique(dropna=True) > 2:
+                                show_table("Post-Hoc Games-Howell — alternatif Tukey saat varians/N tidak sama", games_howell_table(long_for_posthoc, alpha))
                         if effects.iloc[0]["Keputusan"].startswith("Signifikan") and df[grp].nunique(dropna=True) > 2:
                             show_table("Post-Hoc Tukey HSD", tukey_table(long_for_posthoc, alpha))
 
@@ -5532,5 +5671,4 @@ with st.expander("📖 Catatan Metodologis"):
     )
 
 st.markdown('<div class="statpro-footer-spacer"></div>', unsafe_allow_html=True)
-# Footer fixed sudah dirender di awal; baris ini menjadi spacer agar konten paling bawah tidak tertutup footer.
-render_sidebar_footer()
+# Footer fixed sudah dirender di awal; sidebar footer sengaja dihapus mulai v5.2.

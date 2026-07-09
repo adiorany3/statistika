@@ -62,5 +62,9 @@
     "Path analysis/SEM ringan with diagram",
     "ARIMA/ETS forecasting advanced",
     "Complex samples and survey weights"
+  ],
+  "current_version": "v5.2",
+  "important_updates": [
+    "v5.2: removed sidebar credit/footer and added explicit unequal N support for t-test/ANOVA, including Welch ANOVA and Games-Howell when available."
   ]
 }

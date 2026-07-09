@@ -1,11 +1,51 @@
-# Statistik Pro+ v5.1 — Research Analytics Suite
+# Statistik Pro+ v5.2 — Research Analytics Suite
 
-Aplikasi Streamlit untuk analisis statistik yang dirancang sebagai alternatif alat hitung statistika/SPSS untuk riset dasar hingga menengah-lanjutan. Versi ini menambahkan fitur advanced, tetapi UI tetap dibuat sederhana melalui **Mode Pemula/Ahli**, navigasi radio, dan detail yang disimpan dalam expander.
+Aplikasi Streamlit untuk analisis statistik yang dirancang sebagai alternatif alat hitung statistika/SPSS untuk riset dasar hingga menengah-lanjutan. UI tetap dibuat sederhana melalui **Mode Pemula/Ahli**, navigasi radio, dan detail lanjutan yang disimpan dalam expander.
+
+## Update v5.2 — Unequal N Support & Clean Footer
+
+### Footer
+
+- Credit **Developed by Galuh Adi Insani** tetap tampil sebagai fixed bottom footer.
+- Credit di **sidebar dihapus** agar sidebar lebih bersih dan tidak terasa penuh.
+- Footer utama tetap dirender sejak awal script supaya lebih konsisten saat aplikasi rerun.
+
+### Dukungan data jumlah tidak sama / unequal N
+
+Versi ini memperjelas bahwa data dengan jumlah observasi antar grup yang tidak sama tetap bisa dianalisis, dengan catatan metode yang dipilih harus tepat.
+
+Yang ditambahkan:
+
+- Deteksi status ukuran grup: **Seimbang**, **Unequal ringan**, **Unequal sedang**, atau **Unequal kuat**.
+- Ringkasan **N valid, missing, mean, dan SD per grup**.
+- Independent t-test sekarang menampilkan:
+  - metode yang dipakai: Student atau Welch,
+  - status N,
+  - Levene p-value,
+  - saran otomatis jika N tidak sama.
+- One-Way ANOVA sekarang menampilkan:
+  - status unequal N,
+  - Levene p-value,
+  - saran apakah ANOVA biasa cukup atau perlu alternatif.
+- Ditambahkan **Welch ANOVA** sebagai alternatif saat jumlah data/varians antar grup tidak sama.
+- Ditambahkan **Games-Howell post-hoc** jika tersedia melalui `pingouin`, sebagai alternatif Tukey saat N/varians tidak sama.
+
+Panduan praktis:
+
+| Kondisi | Metode yang disarankan |
+|---|---|
+| Dua grup, N tidak sama | Welch t-test lebih aman daripada Student t-test |
+| Dua grup, data sangat tidak normal/ordinal | Mann-Whitney U |
+| Tiga+ grup, N tidak sama tetapi varians homogen | ANOVA biasa masih dapat digunakan dengan hati-hati |
+| Tiga+ grup, N dan varians tidak sama | Welch ANOVA + Games-Howell |
+| Tiga+ grup, data ordinal/sangat tidak normal | Kruskal-Wallis + Dunn post-hoc |
+| Desain berpasangan/pre-post | Jumlah baris harus berpasangan; kasus tidak lengkap otomatis dibuang per pasangan |
 
 ## Pembaruan utama v5.0
 
 ### 🔬 Analisis Lanjutan
-Menu baru **🔬 Analisis Lanjutan** berisi fitur SPSS-like yang sering dibutuhkan dalam riset:
+
+Menu **🔬 Analisis Lanjutan** berisi fitur SPSS-like yang sering dibutuhkan dalam riset:
 
 - **Bootstrapping & Effect Size**
   - Bootstrap mean
@@ -42,7 +82,7 @@ Menu baru **🔬 Analisis Lanjutan** berisi fitur SPSS-like yang sering dibutuhk
   - Status package dan output
   - Saran benchmark manual terhadap SPSS/R/JASP
 
-## Prinsip anti-bug v5.0
+## Prinsip anti-bug
 
 - Tidak memakai tab Streamlit bertumpuk untuk fitur besar.
 - Menu aktif saja yang dirender.
@@ -52,7 +92,7 @@ Menu baru **🔬 Analisis Lanjutan** berisi fitur SPSS-like yang sering dibutuhk
 - Fitur advanced dibungkus `try/except` lokal agar error satu modul tidak menjatuhkan aplikasi.
 - Ditambahkan `runtime.txt` untuk Streamlit Cloud agar memakai Python stabil.
 
-## Fitur utama dari versi sebelumnya
+## Fitur utama
 
 - Mode Pemula dan Mode Ahli.
 - Mulai Cepat dengan skor kesiapan data.
@@ -93,11 +133,3 @@ Manage app → Reboot app
 ## Catatan batasan
 
 Aplikasi ini makin mendekati alternatif SPSS, tetapi belum menggantikan penuh modul enterprise SPSS seperti Complex Samples penuh, Exact Tests lengkap, SEM visual setara AMOS, GLMM/GEE lengkap, ARIMA advanced, dan validasi komersial IBM. Untuk riset formal, hasil penting tetap disarankan dibenchmark terhadap SPSS/R/JASP pada beberapa kasus uji.
-
-
-## Update v5.1 — Persistent Footer Edition
-
-- Footer `Developed by Galuh Adi Insani` dibuat lebih permanen dengan fixed bottom bar.
-- Ditambahkan footer cadangan di sidebar.
-- Padding bawah konten ditambah agar bagian akhir halaman tidak tertutup footer.
-- Footer dirender sejak awal script sehingga tetap muncul walau menu tertentu mengalami error lokal.
