@@ -1,44 +1,22 @@
-# CONTINUE_PROMPT.md
+# Prompt untuk melanjutkan proyek di ChatGPT lain
 
-Salin prompt berikut ke ChatGPT baru setelah mengupload ZIP proyek ini.
+Saya mengunggah ZIP **Statistik Pro+ v5.0 — Research Analytics Suite**. Tolong baca file berikut terlebih dahulu:
 
----
+1. `CHATGPT_MEMORY.md`
+2. `README.md`
+3. `project_memory.json`
+4. `requirements.txt`
+5. `app.py`
 
-Saya mengupload ZIP proyek **Statistik Pro+**. Tolong lanjutkan pengembangan dari versi terbaru di ZIP ini, **jangan mulai ulang dari nol**.
+Lanjutkan dari versi terbaru ini, jangan mulai ulang dari nol.
 
-Langkah pertama:
+Prinsip wajib:
+- UI tidak boleh membingungkan user awam.
+- Pertahankan Mode Pemula dan Mode Ahli.
+- Jangan memakai tab Streamlit bertumpuk untuk fitur besar; gunakan menu aktif/radio.
+- Semua widget baru wajib punya key eksplisit.
+- Jangan membuat slider jika `min_value == max_value`.
+- Setiap hasil statistik harus punya interpretasi dan saran tindakan.
+- Cek `python -m py_compile app.py` dan `zip -T` sebelum memberi ZIP final.
 
-1. Baca `CHATGPT_MEMORY.md`.
-2. Baca `README.md`.
-3. Baca `requirements.txt`.
-4. Inspect `app.py` sebelum mengubah apa pun.
-
-Konteks penting:
-
-- Aplikasi ini adalah Streamlit statistics suite yang ingin menjadi alternatif SPSS/alat hitung statistika.
-- UI harus ramah user awam dan tidak membingungkan.
-- Pertahankan Mode Pemula/Mode Ahli dan Level Detail Ringkas/Lengkap.
-- Jangan membuat tab Streamlit bertumpuk yang merender semua fitur sekaligus; gunakan navigasi stabil dan render menu aktif saja.
-- Semua output statistik harus dimaknai, bukan hanya angka.
-- Jika data tidak kompatibel, aplikasi harus memberi saran apa yang harus diubah, ditambah, diganti, dibersihkan, atau dihapus.
-- Hindari error Streamlit seperti duplicate key dan slider dengan `min_value == max_value`.
-
-Jika melakukan perubahan:
-
-- Buat versi ZIP baru.
-- Update README.
-- Update `CHATGPT_MEMORY.md` jika perubahan besar.
-- Jalankan:
-
-```bash
-python -m py_compile app.py
-zip -T <nama_zip_baru>.zip
-```
-
-Target pengembangan berikutnya yang disarankan:
-
-1. Project Save/Load `.statpro.zip`.
-2. Report Builder Word/PDF yang lebih rapi.
-3. Guided Analysis Wizard end-to-end.
-4. Runtime stabilization untuk Streamlit Cloud.
-5. Validasi akurasi dengan output pembanding SPSS/R/JASP.
+Versi terbaru sudah memiliki menu **🔬 Analisis Lanjutan** dengan bootstrapping, effect size, ANCOVA, MANOVA, repeated measures ANOVA, mediasi, moderasi, forecasting sederhana, missing value analysis, custom tables, dan validasi/benchmark.

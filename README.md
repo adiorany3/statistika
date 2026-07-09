@@ -1,68 +1,95 @@
-# Statistik Pro+ v4.6 — Memory Continuity Edition
+# Statistik Pro+ v5.0 — Research Analytics Suite
 
-Aplikasi Streamlit untuk analisis statistik yang dirancang sebagai alternatif alat hitung statistika/SPSS dengan UI terpandu untuk pengguna awam dan fitur detail untuk pengguna ahli.
+Aplikasi Streamlit untuk analisis statistik yang dirancang sebagai alternatif alat hitung statistika/SPSS untuk riset dasar hingga menengah-lanjutan. Versi ini menambahkan fitur advanced, tetapi UI tetap dibuat sederhana melalui **Mode Pemula/Ahli**, navigasi radio, dan detail yang disimpan dalam expander.
 
+## Pembaruan utama v5.0
 
-## Pembaruan v4.6
+### 🔬 Analisis Lanjutan
+Menu baru **🔬 Analisis Lanjutan** berisi fitur SPSS-like yang sering dibutuhkan dalam riset:
 
-Versi ini menambahkan file continuity/memory agar proyek dapat dilanjutkan di sesi ChatGPT lain tanpa kehilangan konteks.
+- **Bootstrapping & Effect Size**
+  - Bootstrap mean
+  - Bootstrap selisih dua rata-rata
+  - Bootstrap korelasi
+  - Bootstrap koefisien regresi
+  - Cohen’s d, Hedges’ g, Cohen’s dz, Cramer’s V
 
-### File continuity yang ditambahkan
+- **ANCOVA / MANOVA / Repeated Measures ANOVA**
+  - ANCOVA dengan Type II/III sum of squares
+  - Partial eta squared
+  - MANOVA dasar
+  - Repeated Measures ANOVA untuk data format long
 
-- `CHATGPT_MEMORY.md` — konteks lengkap proyek, fitur, bug yang pernah diperbaiki, prinsip UI, dan arah pengembangan berikutnya.
-- `CONTINUE_PROMPT.md` — prompt siap salin untuk membuka proyek ini di ChatGPT/session lain.
-- `project_memory.json` — ringkasan terstruktur untuk AI/tooling.
+- **Mediasi & Moderasi**
+  - Mediasi sederhana X → M → Y
+  - Bootstrap indirect effect
+  - Moderasi sederhana dengan interaction term
 
-Jika ingin melanjutkan di chat baru, upload ZIP ini lalu minta ChatGPT membaca `CHATGPT_MEMORY.md` terlebih dahulu.
+- **Forecasting sederhana**
+  - Moving average
+  - Exponential smoothing
+  - Trend linear
 
-## Pembaruan v4.5
+- **Missing Value Analysis & Custom Tables**
+  - Ringkasan missing value
+  - Pola missing value
+  - Custom crosstab dengan persentase
+  - Chi-square dan Cramer’s V
+  - Tabel ringkasan numerik by group
 
-Versi ini memperbaiki bug pada bagian **Reliabilitas & Faktor → EFA** ketika pengguna hanya memilih 2 variabel. Pada kondisi tersebut jumlah faktor maksimum yang valid hanya 1, sedangkan widget slider Streamlit tidak mengizinkan `min_value` sama dengan `max_value`.
+- **Validasi & Benchmark**
+  - Checklist reproduksibilitas
+  - Status package dan output
+  - Saran benchmark manual terhadap SPSS/R/JASP
 
-### Perbaikan utama
+## Prinsip anti-bug v5.0
 
-- Slider **Jumlah faktor** pada EFA hanya muncul jika jumlah faktor maksimum minimal 2.
-- Jika hanya 2 variabel EFA dipilih, aplikasi otomatis menetapkan **1 faktor** dan menampilkan penjelasan yang ramah user.
-- Ditambahkan safety clamp sebelum perhitungan EFA agar jumlah faktor tidak melebihi batas valid berdasarkan jumlah variabel dan jumlah baris data lengkap.
-- Aplikasi tetap menjaga interpretasi otomatis Reliabilitas, PCA, dan EFA dari versi sebelumnya.
+- Tidak memakai tab Streamlit bertumpuk untuk fitur besar.
+- Menu aktif saja yang dirender.
+- Semua widget baru memakai key eksplisit.
+- Slider berisiko diganti radio/number input defensif.
+- Tidak membuat slider ketika `min_value == max_value`.
+- Fitur advanced dibungkus `try/except` lokal agar error satu modul tidak menjatuhkan aplikasi.
+- Ditambahkan `runtime.txt` untuk Streamlit Cloud agar memakai Python stabil.
 
-## Fitur utama aplikasi
+## Fitur utama dari versi sebelumnya
 
 - Mode Pemula dan Mode Ahli.
-- Mulai Cepat dengan skor kesiapan data dan rekomendasi langkah.
-- Data View & Variable View ala SPSS.
-- Kompatibilitas data dan rekomendasi perbaikan.
+- Mulai Cepat dengan skor kesiapan data.
+- Data View dan Variable View ala SPSS.
+- Kompatibilitas data dan Data Repair Assistant.
 - Smart Assistant untuk rekomendasi uji otomatis.
-- Transformasi dan Data Repair Assistant.
-- Statistik deskriptif, frekuensi, skewness, kurtosis, dan normalitas.
+- Sample size dan power calculator.
+- Statistik deskriptif, skewness, kurtosis, dan normalitas.
 - Rekomendasi tindakan jika normalitas tidak terpenuhi.
-- T-test, ANOVA, korelasi, chi-square, dan uji nonparametrik.
+- T-test, ANOVA, korelasi, chi-square, dan nonparametrik.
 - Regresi dan diagnostic checks.
 - Reliabilitas, PCA, EFA/faktor, dan interpretasi riset otomatis.
-- Visualisasi.
 - Insight riset dan template narasi laporan.
-- Output viewer dan export laporan.
+- Output Viewer dan export Excel/Markdown/HTML/Word.
+- File memory untuk melanjutkan proyek di sesi ChatGPT lain.
 
-## Cara menjalankan
+## Cara menjalankan lokal
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Catatan penggunaan
+## Streamlit Cloud
 
-Jika menggunakan Streamlit Cloud, setelah mengganti file aplikasi sebaiknya lakukan:
+Disarankan memakai Python stabil melalui file `runtime.txt`:
+
+```text
+python-3.11
+```
+
+Setelah upload versi baru:
 
 ```text
 Manage app → Reboot app
 ```
 
-Agar cache versi lama tidak digunakan.
+## Catatan batasan
 
-## Catatan EFA
-
-- Untuk EFA, minimal pilih 2 variabel numerik.
-- Jika hanya 2 variabel dipilih, aplikasi hanya dapat mengekstraksi 1 faktor.
-- Jika ingin memilih lebih dari 1 faktor, gunakan minimal 3 variabel numerik.
-- Default engine EFA adalah fallback stabil berbasis Principal Axis Factoring agar lebih tahan terhadap konflik versi `factor-analyzer` dan `scikit-learn`.
+Aplikasi ini makin mendekati alternatif SPSS, tetapi belum menggantikan penuh modul enterprise SPSS seperti Complex Samples penuh, Exact Tests lengkap, SEM visual setara AMOS, GLMM/GEE lengkap, ARIMA advanced, dan validasi komersial IBM. Untuk riset formal, hasil penting tetap disarankan dibenchmark terhadap SPSS/R/JASP pada beberapa kasus uji.

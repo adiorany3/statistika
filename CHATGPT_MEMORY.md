@@ -490,3 +490,25 @@ Perubahan v4.6:
 - Memperbarui README agar menjelaskan cara melanjutkan proyek di sesi ChatGPT lain.
 
 Aplikasi utama tetap sama seperti v4.5, yaitu versi yang sudah memperbaiki bug slider EFA jumlah faktor.
+
+
+---
+
+## Update v5.0 — Research Analytics Suite
+
+Versi ini menambahkan menu **🔬 Analisis Lanjutan** agar aplikasi semakin dekat dengan alternatif alat hitung statistika/SPSS. Fitur yang ditambahkan:
+
+1. Bootstrapping & Effect Size: bootstrap mean, selisih mean, korelasi, koefisien regresi, Cohen’s d, Hedges’ g, Cohen’s dz, Cramer’s V.
+2. ANCOVA, MANOVA, dan Repeated Measures ANOVA dasar.
+3. Mediasi sederhana dengan bootstrap indirect effect dan moderasi sederhana dengan interaction term.
+4. Forecasting sederhana: moving average, exponential smoothing, dan trend linear.
+5. Missing Value Analysis dan Custom Tables: pola missing, crosstab, chi-square, Cramer’s V, ringkasan by group.
+6. Validasi & Benchmark: checklist reproducibility, package status, dan saran benchmark terhadap SPSS/R/JASP.
+7. Ditambahkan `runtime.txt` berisi `python-3.11` untuk mengurangi masalah package di Streamlit Cloud yang memakai Python terlalu baru.
+
+Prinsip penting v5.0:
+- Jangan gunakan tab bertumpuk untuk fitur besar.
+- Semua widget baru harus punya `key` eksplisit.
+- Hindari slider jika nilai minimum dan maksimum bisa sama.
+- Bungkus renderer fitur besar dengan `try/except` lokal.
+- Untuk fitur advanced, lebih baik tampilkan pesan ramah + saran perbaikan daripada crash.

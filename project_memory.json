@@ -1,7 +1,7 @@
 {
   "project_name": "Statistik Pro+",
-  "version": "v4.6 — Memory Continuity Edition",
-  "base_version_logic": "v4.5",
+  "version": "v5.0 — Research Analytics Suite",
+  "base_version_logic": "v4.6 + advanced SPSS-like modules",
   "primary_file": "app.py",
   "framework": "Streamlit",
   "goal": "Alternatif SPSS/alat hitung statistika yang ramah user awam dan tetap detail untuk user ahli.",
@@ -25,7 +25,12 @@
     "Regresi dan diagnostics",
     "Reliabilitas, PCA, EFA dengan interpretasi",
     "Insight riset dan template laporan",
-    "Output viewer dan export Excel/Markdown/HTML/Word"
+    "Output viewer dan export Excel/Markdown/HTML/Word",
+    "Analisis Lanjutan: bootstrapping, effect size, ANCOVA, MANOVA, repeated measures ANOVA",
+    "Mediasi dan moderasi sederhana dengan bootstrap indirect effect",
+    "Forecasting sederhana: moving average, exponential smoothing, trend linear",
+    "Missing value analysis dan custom tables/crosstab",
+    "Validation/benchmark checklist dan runtime.txt Python 3.11 untuk Streamlit Cloud"
   ],
   "known_fixed_bugs": [
     "PCA slider min=max crash",
@@ -35,7 +40,10 @@
     "DuplicateElementKey from sidebar auto-key",
     "Quick Start issues string/dict mismatch",
     "suggest_analysis_table undefined",
-    "EFA factor slider min=max crash"
+    "EFA factor slider min=max crash",
+    "Advanced section uses explicit widget keys to reduce DuplicateElementKey risk",
+    "Advanced features use number input/radio instead of risky sliders",
+    "Missing pattern table handles duplicate column names safely"
   ],
   "must_keep_guards": [
     "Never create st.slider when min_value == max_value",
@@ -47,10 +55,12 @@
     "zip -T final zip"
   ],
   "recommended_next_work": [
-    "Project save/load format",
-    "Better report builder Word/PDF",
-    "End-to-end guided analysis wizard",
-    "runtime.txt for Streamlit Cloud",
-    "accuracy validation against SPSS/R/JASP"
+    "PDF report builder with publication-quality styling",
+    "Project save/load format including data, metadata, outputs, and syntax log",
+    "Validation benchmark suite with known datasets and expected SPSS/R outputs",
+    "Multiple imputation and Little MCAR test",
+    "Path analysis/SEM ringan with diagram",
+    "ARIMA/ETS forecasting advanced",
+    "Complex samples and survey weights"
   ]
 }

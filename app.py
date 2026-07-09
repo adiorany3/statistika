@@ -120,7 +120,7 @@ except Exception:  # pragma: no cover
 
 
 APP_NAME = "Statistik Pro+"
-APP_SUBTITLE = "Alternatif SPSS berbasis Streamlit: lengkap untuk analisis statistik, namun dipandu dengan UI sederhana untuk pemula dan mode detail untuk pengguna ahli."
+APP_SUBTITLE = "v5.0 Research Analytics Suite — alternatif SPSS berbasis Streamlit dengan UI terpandu, analisis lanjutan, dan interpretasi riset berbahasa Indonesia."
 
 st.set_page_config(page_title=f"{APP_NAME} - Alternatif SPSS", page_icon="📊", layout="wide")
 
@@ -3280,6 +3280,663 @@ with left:
 with right:
     st.metric("Output tersimpan", len(st.session_state.report_items))
 
+
+
+# -----------------------------------------------------------------------------
+# v5.0 Advanced Research Analytics: SPSS-like modules with defensive UI
+# -----------------------------------------------------------------------------
+def _analysis_safe_note(name):
+    return f"Bagian {name} mengalami kendala, tetapi aplikasi tetap berjalan. Cek pilihan variabel dan format data, lalu coba lagi."
+
+
+def _quote_col(col):
+    return str(col).replace('"', '\\"')
+
+
+def _modeling_frame(df, cols):
+    """Return clean modeling frame with simple variable aliases v0, v1, ..."""
+    cols = [c for c in cols if c in df.columns]
+    aliases = {c: f"v{i}" for i, c in enumerate(cols)}
+    mdf = df[cols].rename(columns=aliases).copy()
+    return mdf.dropna(), aliases
+
+
+def _fmt_ci(lo, hi, digits=4):
+    if pd.isna(lo) or pd.isna(hi):
+        return "NA"
+    return f"[{lo:.{digits}f}, {hi:.{digits}f}]"
+
+
+def _cohen_d_independent(x, y):
+    x = pd.to_numeric(pd.Series(x), errors="coerce").dropna().to_numpy(dtype=float)
+    y = pd.to_numeric(pd.Series(y), errors="coerce").dropna().to_numpy(dtype=float)
+    if len(x) < 2 or len(y) < 2:
+        return np.nan, np.nan
+    pooled = np.sqrt(((len(x)-1)*np.var(x, ddof=1) + (len(y)-1)*np.var(y, ddof=1)) / (len(x)+len(y)-2))
+    if pooled == 0 or np.isnan(pooled):
+        return np.nan, np.nan
+    d = (np.mean(x) - np.mean(y)) / pooled
+    correction = 1 - (3 / (4*(len(x)+len(y))-9)) if (len(x)+len(y)) > 2 else 1
+    return d, d * correction
+
+
+def _cohen_d_paired(x, y):
+    pair = pd.DataFrame({"x": x, "y": y}).apply(pd.to_numeric, errors="coerce").dropna()
+    if len(pair) < 2:
+        return np.nan
+    diff = pair["x"] - pair["y"]
+    sd = diff.std(ddof=1)
+    return diff.mean() / sd if sd and not np.isnan(sd) else np.nan
+
+
+def _cramers_v_from_table(table):
+    try:
+        chi2, p, dof, expected = stats.chi2_contingency(table)
+        n = np.asarray(table).sum()
+        if n == 0:
+            return np.nan
+        r, k = table.shape
+        denom = n * max(1, min(k-1, r-1))
+        return np.sqrt(chi2 / denom) if denom > 0 else np.nan
+    except Exception:
+        return np.nan
+
+
+def _bootstrap_array(data, statistic_func, n_boot=2000, seed=123):
+    data = np.asarray(data)
+    n = len(data)
+    if n < 2:
+        return np.nan, np.nan, np.nan
+    rng = np.random.default_rng(seed)
+    vals = []
+    for _ in range(int(n_boot)):
+        idx = rng.integers(0, n, n)
+        try:
+            val = statistic_func(data[idx])
+            if np.isfinite(val):
+                vals.append(float(val))
+        except Exception:
+            continue
+    if not vals:
+        return np.nan, np.nan, np.nan
+    vals = np.asarray(vals)
+    return float(np.mean(vals)), float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
+
+
+def _bootstrap_two_arrays(x, y, statistic_func, paired=False, n_boot=2000, seed=123):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    rng = np.random.default_rng(seed)
+    vals = []
+    if paired:
+        n = min(len(x), len(y))
+        if n < 2:
+            return np.nan, np.nan, np.nan
+        x, y = x[:n], y[:n]
+        for _ in range(int(n_boot)):
+            idx = rng.integers(0, n, n)
+            try:
+                val = statistic_func(x[idx], y[idx])
+                if np.isfinite(val):
+                    vals.append(float(val))
+            except Exception:
+                continue
+    else:
+        if len(x) < 2 or len(y) < 2:
+            return np.nan, np.nan, np.nan
+        for _ in range(int(n_boot)):
+            ix = rng.integers(0, len(x), len(x))
+            iy = rng.integers(0, len(y), len(y))
+            try:
+                val = statistic_func(x[ix], y[iy])
+                if np.isfinite(val):
+                    vals.append(float(val))
+            except Exception:
+                continue
+    if not vals:
+        return np.nan, np.nan, np.nan
+    vals = np.asarray(vals)
+    return float(np.mean(vals)), float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
+
+
+def _small_table_message(message):
+    return pd.DataFrame({"Informasi": [message]})
+
+
+def render_bootstrap_effect_size(df, num_cols, cat_cols):
+    st.markdown("### 🧪 Bootstrapping & Effect Size")
+    st.caption("Gunakan saat ingin confidence interval yang lebih robust dan makna praktis, bukan hanya p-value.")
+    mode = st.radio(
+        "Jenis perhitungan",
+        ["Mean satu variabel", "Selisih dua rata-rata", "Korelasi", "Regresi linear koefisien", "Effect size cepat"],
+        horizontal=True,
+        key="v5_boot_mode",
+    )
+    n_boot = int(st.number_input("Jumlah bootstrap resampling", min_value=200, max_value=10000, value=2000, step=200, key="v5_boot_n"))
+    seed = int(st.number_input("Seed", min_value=1, max_value=999999, value=123, step=1, key="v5_boot_seed"))
+
+    if mode == "Mean satu variabel":
+        if not num_cols:
+            st.warning("Butuh minimal 1 variabel numerik.")
+            return
+        col = st.selectbox("Variabel numerik", num_cols, key="v5_boot_mean_col")
+        values = pd.to_numeric(df[col], errors="coerce").dropna().to_numpy(dtype=float)
+        if st.button("Hitung bootstrap mean", key="v5_boot_mean_btn"):
+            boot_mean, lo, hi = _bootstrap_array(values, np.mean, n_boot, seed)
+            res = pd.DataFrame([{
+                "Variabel": col,
+                "N valid": len(values),
+                "Mean sampel": np.mean(values) if len(values) else np.nan,
+                "Bootstrap mean": boot_mean,
+                "CI 95% bawah": lo,
+                "CI 95% atas": hi,
+                "Makna": "Rata-rata populasi diperkirakan berada dalam rentang CI 95%. Jika rentang sempit, estimasi lebih presisi.",
+            }])
+            show_table("Bootstrap Mean", res, "Bootstrap membantu saat asumsi normalitas meragukan atau sampel relatif kecil.")
+
+    elif mode == "Selisih dua rata-rata":
+        if len(num_cols) < 1:
+            st.warning("Butuh variabel numerik sebagai skor.")
+            return
+        compare_style = st.radio("Format data", ["Satu skor + satu grup", "Dua kolom skor"], horizontal=True, key="v5_boot_diff_style")
+        if compare_style == "Satu skor + satu grup":
+            score = st.selectbox("Variabel skor", num_cols, key="v5_boot_score")
+            if not cat_cols:
+                st.warning("Butuh variabel grup/kategori.")
+                return
+            group = st.selectbox("Variabel grup", cat_cols, key="v5_boot_group")
+            levels = df[group].dropna().astype(str).unique().tolist()
+            if len(levels) < 2:
+                st.warning("Variabel grup harus punya minimal 2 kategori.")
+                return
+            chosen = st.multiselect("Pilih 2 kelompok", levels, default=levels[:2], key="v5_boot_levels")
+            if len(chosen) == 2 and st.button("Hitung bootstrap selisih mean", key="v5_boot_diff_btn"):
+                x = pd.to_numeric(df.loc[df[group].astype(str) == chosen[0], score], errors="coerce").dropna().to_numpy(float)
+                y = pd.to_numeric(df.loc[df[group].astype(str) == chosen[1], score], errors="coerce").dropna().to_numpy(float)
+                stat, lo, hi = _bootstrap_two_arrays(x, y, lambda a, b: np.mean(a) - np.mean(b), False, n_boot, seed)
+                d, g = _cohen_d_independent(x, y)
+                res = pd.DataFrame([{
+                    "Skor": score,
+                    "Kelompok 1": chosen[0], "N1": len(x), "Mean1": np.mean(x) if len(x) else np.nan,
+                    "Kelompok 2": chosen[1], "N2": len(y), "Mean2": np.mean(y) if len(y) else np.nan,
+                    "Selisih Mean": np.mean(x)-np.mean(y) if len(x) and len(y) else np.nan,
+                    "Bootstrap CI 95%": _fmt_ci(lo, hi),
+                    "Cohen's d": d, "Hedges' g": g,
+                    "Makna": "Jika CI tidak melewati 0, perbedaan rata-rata relatif kuat secara statistik. Cohen's d/g menunjukkan besar perbedaan praktis.",
+                }])
+                show_table("Bootstrap Selisih Mean + Effect Size", res)
+        else:
+            c1 = st.selectbox("Kolom skor 1", num_cols, key="v5_boot_col1")
+            c2 = st.selectbox("Kolom skor 2", num_cols, index=1 if len(num_cols)>1 else 0, key="v5_boot_col2")
+            paired = st.checkbox("Data berpasangan/pre-post", value=True, key="v5_boot_paired")
+            if c1 == c2:
+                st.info("Pilih dua kolom berbeda.")
+            elif st.button("Hitung bootstrap selisih kolom", key="v5_boot_diffcols_btn"):
+                pair = df[[c1, c2]].apply(pd.to_numeric, errors="coerce").dropna() if paired else None
+                x = pair[c1].to_numpy(float) if paired else pd.to_numeric(df[c1], errors="coerce").dropna().to_numpy(float)
+                y = pair[c2].to_numpy(float) if paired else pd.to_numeric(df[c2], errors="coerce").dropna().to_numpy(float)
+                stat, lo, hi = _bootstrap_two_arrays(x, y, lambda a, b: np.mean(a)-np.mean(b), paired, n_boot, seed)
+                effect = _cohen_d_paired(x, y) if paired else _cohen_d_independent(x, y)[0]
+                res = pd.DataFrame([{"Kolom 1": c1, "Kolom 2": c2, "N": len(x) if paired else f"{len(x)} / {len(y)}", "Selisih Mean": stat, "CI 95%": _fmt_ci(lo, hi), "Effect Size": effect}])
+                show_table("Bootstrap Selisih Dua Kolom", res)
+
+    elif mode == "Korelasi":
+        if len(num_cols) < 2:
+            st.warning("Butuh minimal 2 variabel numerik.")
+            return
+        xcol = st.selectbox("Variabel X", num_cols, key="v5_boot_corr_x")
+        ycol = st.selectbox("Variabel Y", [c for c in num_cols if c != xcol] or num_cols, key="v5_boot_corr_y")
+        method = st.radio("Metode", ["Pearson", "Spearman"], horizontal=True, key="v5_boot_corr_method")
+        if st.button("Hitung bootstrap korelasi", key="v5_boot_corr_btn"):
+            pair = df[[xcol, ycol]].apply(pd.to_numeric, errors="coerce").dropna()
+            arr = pair.to_numpy(float)
+            def corr_stat(sample):
+                if method == "Spearman":
+                    return stats.spearmanr(sample[:, 0], sample[:, 1]).statistic
+                return stats.pearsonr(sample[:, 0], sample[:, 1]).statistic
+            boot, lo, hi = _bootstrap_array(arr, corr_stat, n_boot, seed)
+            p = stats.spearmanr(pair[xcol], pair[ycol]).pvalue if method == "Spearman" else stats.pearsonr(pair[xcol], pair[ycol]).pvalue
+            res = pd.DataFrame([{"X": xcol, "Y": ycol, "N": len(pair), "r sampel": corr_stat(arr), "p-value": p, "Bootstrap r": boot, "CI 95%": _fmt_ci(lo, hi), "Makna": "Arah ditunjukkan oleh tanda r; kekuatan praktis dibaca dari besar |r| dan CI."}])
+            show_table("Bootstrap Korelasi", res)
+
+    elif mode == "Regresi linear koefisien":
+        if sm is None or len(num_cols) < 2:
+            st.warning("Butuh statsmodels dan minimal 2 variabel numerik.")
+            return
+        y = st.selectbox("Variabel dependen/Y", num_cols, key="v5_boot_reg_y")
+        xs = st.multiselect("Prediktor numerik/X", [c for c in num_cols if c != y], default=[c for c in num_cols if c != y][:1], key="v5_boot_reg_xs")
+        if xs and st.button("Hitung bootstrap koefisien regresi", key="v5_boot_reg_btn"):
+            data = df[[y] + xs].apply(pd.to_numeric, errors="coerce").dropna()
+            if len(data) < len(xs) + 3:
+                st.warning("Kasus lengkap terlalu sedikit untuk regresi.")
+                return
+            X = sm.add_constant(data[xs])
+            model = sm.OLS(data[y], X).fit()
+            rng = np.random.default_rng(seed)
+            boot_coefs = []
+            for _ in range(n_boot):
+                idx = rng.integers(0, len(data), len(data))
+                sample = data.iloc[idx]
+                try:
+                    bm = sm.OLS(sample[y], sm.add_constant(sample[xs])).fit()
+                    boot_coefs.append(bm.params.reindex(model.params.index).to_numpy(float))
+                except Exception:
+                    continue
+            if not boot_coefs:
+                st.warning("Bootstrap regresi gagal dihitung. Cek multikolinearitas atau data konstan.")
+                return
+            boot_arr = np.vstack(boot_coefs)
+            rows = []
+            for i, term in enumerate(model.params.index):
+                rows.append({"Term": term, "Koefisien OLS": model.params[term], "p-value": model.pvalues[term], "CI bootstrap bawah": np.percentile(boot_arr[:, i], 2.5), "CI bootstrap atas": np.percentile(boot_arr[:, i], 97.5)})
+            res = pd.DataFrame(rows)
+            show_table("Bootstrap Koefisien Regresi", res, "Jika CI bootstrap prediktor tidak melewati 0, kontribusi prediktor relatif kuat.")
+
+    else:
+        effect_mode = st.radio("Effect size", ["Cohen's d dua kelompok", "Cohen's dz berpasangan", "Cramer's V crosstab"], horizontal=True, key="v5_effect_mode")
+        if effect_mode == "Cohen's d dua kelompok":
+            if not num_cols or not cat_cols:
+                st.warning("Butuh skor numerik dan grup kategori.")
+                return
+            score = st.selectbox("Skor", num_cols, key="v5_eff_score")
+            group = st.selectbox("Grup", cat_cols, key="v5_eff_group")
+            levels = df[group].dropna().astype(str).unique().tolist()
+            chosen = st.multiselect("Pilih 2 grup", levels, default=levels[:2], key="v5_eff_levels")
+            if len(chosen) == 2 and st.button("Hitung Cohen's d", key="v5_eff_d_btn"):
+                x = pd.to_numeric(df.loc[df[group].astype(str)==chosen[0], score], errors="coerce").dropna()
+                y = pd.to_numeric(df.loc[df[group].astype(str)==chosen[1], score], errors="coerce").dropna()
+                d, g = _cohen_d_independent(x, y)
+                show_table("Effect Size Cohen's d", pd.DataFrame([{"Skor": score, "Grup 1": chosen[0], "Grup 2": chosen[1], "Cohen's d": d, "Hedges' g": g, "Interpretasi": _effect_size_label(d, "d") if not pd.isna(d) else "NA"}]))
+        elif effect_mode == "Cohen's dz berpasangan":
+            if len(num_cols) < 2:
+                st.warning("Butuh dua kolom numerik.")
+                return
+            before = st.selectbox("Kolom 1", num_cols, key="v5_eff_before")
+            after = st.selectbox("Kolom 2", [c for c in num_cols if c != before] or num_cols, key="v5_eff_after")
+            if st.button("Hitung dz", key="v5_eff_dz_btn"):
+                dz = _cohen_d_paired(df[before], df[after])
+                show_table("Effect Size Paired", pd.DataFrame([{"Kolom 1": before, "Kolom 2": after, "Cohen's dz": dz, "Interpretasi": _effect_size_label(dz, "d") if not pd.isna(dz) else "NA"}]))
+        else:
+            if len(cat_cols) < 2:
+                st.warning("Butuh dua variabel kategori.")
+                return
+            a = st.selectbox("Kategori 1", cat_cols, key="v5_eff_cat1")
+            b = st.selectbox("Kategori 2", [c for c in cat_cols if c != a] or cat_cols, key="v5_eff_cat2")
+            if st.button("Hitung Cramer's V", key="v5_eff_v_btn"):
+                tab = pd.crosstab(df[a], df[b])
+                v = _cramers_v_from_table(tab)
+                show_table("Effect Size Cramer's V", pd.DataFrame([{"Variabel 1": a, "Variabel 2": b, "Cramer's V": v, "Interpretasi": _effect_size_label(v, "r") if not pd.isna(v) else "NA"}]))
+                st.dataframe(tab, use_container_width=True)
+
+
+def render_glm_family(df, num_cols, cat_cols, all_cols):
+    st.markdown("### 📐 ANCOVA, MANOVA, dan Repeated Measures")
+    st.caption("Modul lanjutan ini dibuat bertahap dan defensif. Gunakan setelah data sudah bersih dan variabel jelas.")
+    analysis = st.radio("Pilih analisis", ["ANCOVA", "MANOVA", "Repeated Measures ANOVA"], horizontal=True, key="v5_glm_mode")
+    alpha = st.number_input("Alpha", min_value=0.001, max_value=0.20, value=float(st.session_state.get("active_alpha", 0.05)), step=0.01, format="%.3f", key="v5_glm_alpha")
+
+    if analysis == "ANCOVA":
+        if sm is None or not num_cols or not cat_cols:
+            st.warning("ANCOVA butuh statsmodels, 1 variabel dependen numerik, 1 faktor kategori, dan kovariat numerik.")
+            return
+        y = st.selectbox("Variabel dependen/Y numerik", num_cols, key="v5_ancova_y")
+        factor = st.selectbox("Faktor/kategori", cat_cols, key="v5_ancova_factor")
+        covs = st.multiselect("Kovariat numerik", [c for c in num_cols if c != y], default=[c for c in num_cols if c != y][:1], key="v5_ancova_covs")
+        typ = st.radio("Type SS", [2, 3], horizontal=True, key="v5_ancova_typ")
+        if covs and st.button("Jalankan ANCOVA", key="v5_ancova_btn"):
+            cols = [y, factor] + covs
+            data, aliases = _modeling_frame(df, cols)
+            if len(data) < len(covs) + data[aliases[factor]].nunique() + 3:
+                st.warning("Kasus lengkap terlalu sedikit untuk ANCOVA.")
+                return
+            formula = f"{aliases[y]} ~ C({aliases[factor]}) + " + " + ".join(aliases[c] for c in covs)
+            if int(typ) == 3:
+                formula = f"{aliases[y]} ~ C({aliases[factor]}) + " + " + ".join(aliases[c] for c in covs)
+            model = smf.ols(formula, data=data).fit()
+            table = sm.stats.anova_lm(model, typ=int(typ)).reset_index().rename(columns={"index": "Efek"})
+            if "sum_sq" in table.columns:
+                resid_ss = float(table.loc[table["Efek"].astype(str).str.lower().eq("residual"), "sum_sq"].iloc[0]) if any(table["Efek"].astype(str).str.lower().eq("residual")) else np.nan
+                table["partial_eta_sq"] = table["sum_sq"].apply(lambda ss: ss/(ss+resid_ss) if pd.notna(resid_ss) and (ss+resid_ss)>0 else np.nan)
+            table["Keputusan"] = table.get("PR(>F)", pd.Series([np.nan]*len(table))).apply(lambda p: decision_text(p, alpha))
+            note = "ANCOVA menguji perbedaan rata-rata Y antar kelompok setelah mengontrol kovariat. Baca efek faktor utama setelah kontrol kovariat."
+            show_table("ANCOVA", table, note)
+            st.caption("Model: " + formula)
+            add_report("Ringkasan Model ANCOVA", pd.DataFrame({"Parameter": model.params.index, "Koefisien": model.params.values, "p-value": model.pvalues.values}))
+
+    elif analysis == "MANOVA":
+        if sm is None or len(num_cols) < 2 or not all_cols:
+            st.warning("MANOVA butuh minimal 2 variabel dependen numerik dan minimal 1 prediktor.")
+            return
+        dvs = st.multiselect("Variabel dependen numerik/lebih dari satu", num_cols, default=num_cols[:min(2, len(num_cols))], key="v5_manova_dvs")
+        predictors = st.multiselect("Prediktor/faktor/kovariat", [c for c in all_cols if c not in dvs], default=cat_cols[:1] if cat_cols else [c for c in num_cols if c not in dvs][:1], key="v5_manova_preds")
+        if len(dvs) >= 2 and predictors and st.button("Jalankan MANOVA", key="v5_manova_btn"):
+            try:
+                from statsmodels.multivariate.manova import MANOVA
+                cols = dvs + predictors
+                data, aliases = _modeling_frame(df, cols)
+                terms = []
+                for p in predictors:
+                    if p in cat_cols or not pd.api.types.is_numeric_dtype(df[p]):
+                        terms.append(f"C({aliases[p]})")
+                    else:
+                        terms.append(aliases[p])
+                formula = " + ".join(aliases[d] for d in dvs) + " ~ " + " + ".join(terms)
+                fit = MANOVA.from_formula(formula, data=data)
+                text_summary = str(fit.mv_test())
+                st.text(text_summary)
+                report_df = pd.DataFrame({"MANOVA Summary": text_summary.splitlines()[:500]})
+                add_report("MANOVA", report_df, "MANOVA menguji apakah kombinasi beberapa variabel dependen berbeda/terpengaruh oleh prediktor.")
+            except Exception as exc:
+                st.error("MANOVA gagal dihitung. Pastikan data tidak singular, kategori tidak terlalu banyak, dan kasus lengkap cukup.")
+                st.exception(exc)
+
+    else:
+        st.info("Repeated Measures ANOVA pada modul ini memakai format long: satu baris = satu pengukuran pada satu subjek.")
+        if sm is None:
+            st.warning("Butuh statsmodels.")
+            return
+        subject = st.selectbox("ID subjek/responden", all_cols, key="v5_rm_subject")
+        within_candidates = [c for c in all_cols if c != subject]
+        within = st.selectbox("Faktor waktu/kondisi (within-subject)", within_candidates, key="v5_rm_within")
+        dv = st.selectbox("Variabel skor/Y numerik", [c for c in num_cols if c not in [subject, within]] or num_cols, key="v5_rm_dv")
+        if st.button("Jalankan Repeated Measures ANOVA", key="v5_rm_btn"):
+            try:
+                from statsmodels.stats.anova import AnovaRM
+                data = df[[subject, within, dv]].dropna().copy()
+                data[dv] = pd.to_numeric(data[dv], errors="coerce")
+                data = data.dropna()
+                if data[subject].nunique() < 2 or data[within].nunique() < 2:
+                    st.warning("Butuh minimal 2 subjek dan 2 waktu/kondisi.")
+                    return
+                fit = AnovaRM(data, depvar=dv, subject=subject, within=[within]).fit()
+                table = fit.anova_table.reset_index().rename(columns={"index": "Efek"})
+                table["Keputusan"] = table.get("Pr > F", pd.Series([np.nan]*len(table))).apply(lambda p: decision_text(p, alpha))
+                show_table("Repeated Measures ANOVA", table, "Digunakan untuk membandingkan skor subjek yang sama pada beberapa waktu/kondisi.")
+            except Exception as exc:
+                st.error("Repeated Measures ANOVA gagal. Pastikan data long dan seimbang; setiap subjek sebaiknya punya semua waktu/kondisi.")
+                st.exception(exc)
+
+
+def render_mediation_moderation(df, num_cols, cat_cols):
+    st.markdown("### 🔗 Mediasi & Moderasi")
+    st.caption("Cocok untuk riset sosial, pendidikan, psikologi, manajemen: menguji mekanisme dan kondisi pengaruh.")
+    if sm is None:
+        st.warning("Butuh statsmodels.")
+        return
+    mode = st.radio("Analisis", ["Mediasi sederhana", "Moderasi sederhana"], horizontal=True, key="v5_medmod_mode")
+    alpha = st.number_input("Alpha", min_value=0.001, max_value=0.20, value=float(st.session_state.get("active_alpha", 0.05)), step=0.01, format="%.3f", key="v5_medmod_alpha")
+
+    if len(num_cols) < 3:
+        st.warning("Modul ini membutuhkan minimal 3 variabel numerik.")
+        return
+
+    if mode == "Mediasi sederhana":
+        x = st.selectbox("X / variabel independen", num_cols, key="v5_med_x")
+        m = st.selectbox("M / mediator", [c for c in num_cols if c != x] or num_cols, key="v5_med_m")
+        y = st.selectbox("Y / variabel dependen", [c for c in num_cols if c not in [x, m]] or num_cols, key="v5_med_y")
+        covs = st.multiselect("Kovariat opsional", [c for c in num_cols if c not in [x, m, y]], key="v5_med_covs")
+        n_boot = int(st.number_input("Bootstrap indirect effect", min_value=200, max_value=10000, value=2000, step=200, key="v5_med_boot"))
+        if st.button("Jalankan Mediasi", key="v5_med_btn"):
+            data = df[[x, m, y] + covs].apply(pd.to_numeric, errors="coerce").dropna()
+            if len(data) < len(covs) + 10:
+                st.warning("Kasus lengkap terlalu sedikit untuk mediasi.")
+                return
+            X_a = sm.add_constant(data[[x] + covs])
+            a_model = sm.OLS(data[m], X_a).fit()
+            X_b = sm.add_constant(data[[x, m] + covs])
+            b_model = sm.OLS(data[y], X_b).fit()
+            X_c = sm.add_constant(data[[x] + covs])
+            c_model = sm.OLS(data[y], X_c).fit()
+            a = a_model.params.get(x, np.nan)
+            b = b_model.params.get(m, np.nan)
+            cp = b_model.params.get(x, np.nan)
+            c_total = c_model.params.get(x, np.nan)
+            indirect = a * b
+            rng = np.random.default_rng(123)
+            boot_vals = []
+            for _ in range(n_boot):
+                idx = rng.integers(0, len(data), len(data))
+                sample = data.iloc[idx]
+                try:
+                    am = sm.OLS(sample[m], sm.add_constant(sample[[x] + covs])).fit().params.get(x, np.nan)
+                    bm = sm.OLS(sample[y], sm.add_constant(sample[[x, m] + covs])).fit().params.get(m, np.nan)
+                    val = am * bm
+                    if np.isfinite(val):
+                        boot_vals.append(val)
+                except Exception:
+                    continue
+            lo, hi = (np.percentile(boot_vals, 2.5), np.percentile(boot_vals, 97.5)) if boot_vals else (np.nan, np.nan)
+            res = pd.DataFrame([
+                {"Jalur": "a: X → M", "Koefisien": a, "p-value": a_model.pvalues.get(x, np.nan), "Makna": "Apakah X berhubungan dengan mediator."},
+                {"Jalur": "b: M → Y | X", "Koefisien": b, "p-value": b_model.pvalues.get(m, np.nan), "Makna": "Apakah mediator menjelaskan Y setelah mengontrol X."},
+                {"Jalur": "c': X → Y | M", "Koefisien": cp, "p-value": b_model.pvalues.get(x, np.nan), "Makna": "Efek langsung X ke Y setelah mediator masuk."},
+                {"Jalur": "c total: X → Y", "Koefisien": c_total, "p-value": c_model.pvalues.get(x, np.nan), "Makna": "Efek total X ke Y."},
+                {"Jalur": "Indirect a*b", "Koefisien": indirect, "p-value": np.nan, "CI Bootstrap 95%": _fmt_ci(lo, hi), "Makna": "Mediasi didukung jika CI indirect effect tidak melewati 0."},
+            ])
+            show_table("Mediasi Sederhana", res, "Interpretasi utama mediasi dibaca dari bootstrap CI pada indirect effect.")
+
+    else:
+        x = st.selectbox("X / prediktor numerik", num_cols, key="v5_mod_x")
+        w = st.selectbox("W / moderator numerik", [c for c in num_cols if c != x] or num_cols, key="v5_mod_w")
+        y = st.selectbox("Y / dependen numerik", [c for c in num_cols if c not in [x, w]] or num_cols, key="v5_mod_y")
+        covs = st.multiselect("Kovariat opsional", [c for c in num_cols if c not in [x, w, y]], key="v5_mod_covs")
+        if st.button("Jalankan Moderasi", key="v5_mod_btn"):
+            data = df[[x, w, y] + covs].apply(pd.to_numeric, errors="coerce").dropna().copy()
+            if len(data) < len(covs) + 10:
+                st.warning("Kasus lengkap terlalu sedikit untuk moderasi.")
+                return
+            data["X_centered"] = data[x] - data[x].mean()
+            data["W_centered"] = data[w] - data[w].mean()
+            data["XxW"] = data["X_centered"] * data["W_centered"]
+            Xcols = ["X_centered", "W_centered", "XxW"] + covs
+            model = sm.OLS(data[y], sm.add_constant(data[Xcols])).fit()
+            table = pd.DataFrame({"Term": model.params.index, "Koefisien": model.params.values, "p-value": model.pvalues.values, "CI bawah": model.conf_int()[0].values, "CI atas": model.conf_int()[1].values})
+            table["Makna"] = table["Term"].apply(lambda t: "Interaksi signifikan berarti pengaruh X terhadap Y berubah tergantung tingkat moderator W." if t == "XxW" else "Parameter model regresi.")
+            show_table("Moderasi Sederhana", table, "Fokus utama moderasi adalah term interaksi XxW.")
+            st.caption(f"R² = {model.rsquared:.4f}; Adjusted R² = {model.rsquared_adj:.4f}")
+
+
+def _simple_exponential_smoothing(values, alpha=0.3):
+    values = np.asarray(values, dtype=float)
+    if len(values) == 0:
+        return np.array([])
+    smoothed = [values[0]]
+    for val in values[1:]:
+        smoothed.append(alpha * val + (1 - alpha) * smoothed[-1])
+    return np.asarray(smoothed)
+
+
+def render_forecasting(df, num_cols, all_cols):
+    st.markdown("### 📅 Forecasting Sederhana")
+    st.caption("Untuk data runtun waktu dasar: trend, moving average, dan exponential smoothing. Cocok untuk eksplorasi awal, bukan model ARIMA penuh.")
+    if not num_cols:
+        st.warning("Butuh minimal satu variabel numerik.")
+        return
+    value_col = st.selectbox("Variabel nilai", num_cols, key="v5_forecast_value")
+    date_col = st.selectbox("Kolom waktu/tanggal opsional", ["(urutan baris)"] + all_cols, key="v5_forecast_date")
+    method = st.radio("Metode", ["Moving Average", "Exponential Smoothing", "Trend Linear"], horizontal=True, key="v5_forecast_method")
+    horizon = int(st.number_input("Jumlah periode forecast", min_value=1, max_value=60, value=5, step=1, key="v5_forecast_horizon"))
+    data = df[[value_col] + ([] if date_col == "(urutan baris)" else [date_col])].copy()
+    data[value_col] = pd.to_numeric(data[value_col], errors="coerce")
+    if date_col != "(urutan baris)":
+        data[date_col] = pd.to_datetime(data[date_col], errors="coerce")
+        data = data.dropna().sort_values(date_col)
+    else:
+        data = data.dropna().reset_index(drop=True)
+        data["Periode"] = np.arange(1, len(data)+1)
+        date_col = "Periode"
+    if len(data) < 4:
+        st.warning("Data runtun waktu minimal 4 observasi agar forecast sederhana masuk akal.")
+        return
+    window = 3
+    alpha_smooth = 0.3
+    if method == "Moving Average":
+        max_win = min(24, len(data))
+        if max_win <= 2:
+            window = 2
+            st.caption("Window moving average otomatis = 2 karena data sangat pendek.")
+        else:
+            window = int(st.number_input("Window moving average", min_value=2, max_value=max_win, value=min(3, max_win), step=1, key="v5_forecast_ma_window"))
+    elif method == "Exponential Smoothing":
+        alpha_smooth = float(st.number_input("Alpha smoothing", min_value=0.01, max_value=0.99, value=0.30, step=0.05, format="%.2f", key="v5_forecast_alpha"))
+    if st.button("Buat forecast", key="v5_forecast_btn"):
+        y = data[value_col].to_numpy(float)
+        if method == "Moving Average":
+            ma = pd.Series(y).rolling(window=window, min_periods=1).mean().to_numpy()
+            future = np.repeat(ma[-1], horizon)
+            fitted = ma
+        elif method == "Exponential Smoothing":
+            fitted = _simple_exponential_smoothing(y, alpha_smooth)
+            future = np.repeat(fitted[-1], horizon)
+        else:
+            x = np.arange(len(y))
+            coef = np.polyfit(x, y, 1)
+            fitted = coef[0]*x + coef[1]
+            future_x = np.arange(len(y), len(y)+horizon)
+            future = coef[0]*future_x + coef[1]
+        forecast_df = pd.DataFrame({"Periode_ke": np.arange(len(y)+1, len(y)+horizon+1), "Forecast": future})
+        summary = pd.DataFrame([{"Metode": method, "N historis": len(y), "Forecast periode berikutnya": future[0], "Catatan": "Gunakan sebagai estimasi awal; validasi dengan data aktual jika tersedia."}])
+        show_table("Forecasting Sederhana", summary)
+        st.dataframe(forecast_df, use_container_width=True)
+        add_report("Forecast Detail", forecast_df, "Forecast sederhana berdasarkan metode yang dipilih.")
+        if px is not None:
+            plot_df = pd.DataFrame({"Periode": np.arange(1, len(y)+1), "Aktual": y, "Fitted": fitted})
+            st.plotly_chart(px.line(plot_df, x="Periode", y=["Aktual", "Fitted"], title="Aktual vs fitted"), use_container_width=True)
+
+
+def render_missing_custom_tables(df, num_cols, cat_cols, all_cols):
+    st.markdown("### 🧩 Missing Value Analysis & Custom Tables")
+    task = st.radio("Pilih modul", ["Missing Value Analysis", "Custom Crosstab", "Tabel Ringkasan by Group"], horizontal=True, key="v5_missing_custom_task")
+    if task == "Missing Value Analysis":
+        miss = pd.DataFrame({
+            "Variabel": df.columns,
+            "Missing n": df.isna().sum().values,
+            "Missing %": (df.isna().mean().values * 100),
+            "Tipe": [str(df[c].dtype) for c in df.columns],
+            "Saran": ["Prioritas cek/imputasi" if df[c].isna().mean() >= 0.10 else "Masih relatif aman" if df[c].isna().mean() > 0 else "Tidak ada missing" for c in df.columns],
+        }).sort_values("Missing %", ascending=False)
+        show_table("Missing Value Summary", miss, "Missing value tinggi dapat mengurangi sampel efektif dan memengaruhi estimasi.", save=False)
+        if st.button("Simpan Missing Value Summary", key="v5_save_missing"):
+            add_report("Missing Value Summary", miss, "Ringkasan missing value per variabel.")
+            st.success("Tersimpan ke Output Viewer.")
+        with st.expander("Pola missing value", expanded=False):
+            pattern = df.isna().astype(int)
+            pattern_cols = pattern.columns.tolist()
+            if len(pattern_cols) > 20:
+                st.caption("Menampilkan 20 kolom pertama agar tabel tetap ringan.")
+                pattern = pattern.iloc[:, :20]
+            pattern.columns = [f"kolom_{i+1}" for i in range(pattern.shape[1])]
+            patt = pattern.groupby(pattern.columns.tolist(), dropna=False).size().reset_index(name="Jumlah kasus") if not pattern.empty else _small_table_message("Tidak ada data")
+            st.dataframe(patt.sort_values("Jumlah kasus", ascending=False).head(100), use_container_width=True)
+            st.caption("Pada pola missing: 1 = missing, 0 = terisi. Nama kolom disingkat agar aman jika ada nama variabel duplikat.")
+        st.markdown("**Apa yang sebaiknya dilakukan jika banyak missing?**")
+        st.markdown("- Cek apakah missing berasal dari kesalahan input/kode seperti 99, -, atau NA.\n- Jika missing kecil dan acak, listwise deletion bisa dipertimbangkan.\n- Jika missing sistematis, jangan langsung hapus; laporkan pola dan pertimbangkan imputasi.\n- Untuk skala kuesioner, hindari imputasi jika responden melewati banyak item inti.")
+
+    elif task == "Custom Crosstab":
+        if len(cat_cols) < 2:
+            st.warning("Butuh minimal 2 variabel kategori.")
+            return
+        row = st.selectbox("Baris", cat_cols, key="v5_xtab_row")
+        col = st.selectbox("Kolom", [c for c in cat_cols if c != row] or cat_cols, key="v5_xtab_col")
+        percent = st.radio("Persentase", ["Jumlah", "% baris", "% kolom", "% total"], horizontal=True, key="v5_xtab_percent")
+        if st.button("Buat Custom Crosstab", key="v5_xtab_btn"):
+            tab = pd.crosstab(df[row], df[col])
+            if percent == "% baris":
+                shown = pd.crosstab(df[row], df[col], normalize="index") * 100
+            elif percent == "% kolom":
+                shown = pd.crosstab(df[row], df[col], normalize="columns") * 100
+            elif percent == "% total":
+                shown = pd.crosstab(df[row], df[col], normalize="all") * 100
+            else:
+                shown = tab
+            st.dataframe(shown, use_container_width=True)
+            chi2, p, dof, exp = stats.chi2_contingency(tab) if tab.size else (np.nan, np.nan, np.nan, None)
+            v = _cramers_v_from_table(tab)
+            summary = pd.DataFrame([{"Baris": row, "Kolom": col, "Chi-square": chi2, "df": dof, "p-value": p, "Cramer's V": v, "Makna": "Crosstab menunjukkan distribusi kategori; Cramer's V menunjukkan kekuatan asosiasi."}])
+            show_table("Custom Crosstab Summary", summary)
+            add_report("Custom Crosstab Table", shown.reset_index(), f"Crosstab {row} × {col}; mode: {percent}")
+
+    else:
+        if not num_cols:
+            st.warning("Butuh minimal 1 variabel numerik.")
+            return
+        if not cat_cols:
+            st.warning("Butuh minimal 1 variabel grup/kategori.")
+            return
+        group = st.selectbox("Grup", cat_cols, key="v5_sum_group")
+        values = st.multiselect("Variabel numerik", num_cols, default=num_cols[:min(4, len(num_cols))], key="v5_sum_values")
+        stats_choice = st.multiselect("Statistik", ["N", "Mean", "SD", "Median", "Min", "Max"], default=["N", "Mean", "SD"], key="v5_sum_stats")
+        if values and st.button("Buat Tabel Ringkasan", key="v5_sum_btn"):
+            grouped = df.groupby(group, dropna=False)[values]
+            frames = []
+            if "N" in stats_choice: frames.append(grouped.count().add_suffix("_N"))
+            if "Mean" in stats_choice: frames.append(grouped.mean(numeric_only=True).add_suffix("_Mean"))
+            if "SD" in stats_choice: frames.append(grouped.std(numeric_only=True).add_suffix("_SD"))
+            if "Median" in stats_choice: frames.append(grouped.median(numeric_only=True).add_suffix("_Median"))
+            if "Min" in stats_choice: frames.append(grouped.min(numeric_only=True).add_suffix("_Min"))
+            if "Max" in stats_choice: frames.append(grouped.max(numeric_only=True).add_suffix("_Max"))
+            table = pd.concat(frames, axis=1).reset_index() if frames else _small_table_message("Tidak ada statistik dipilih")
+            show_table("Tabel Ringkasan by Group", table, "Tabel ini berguna untuk laporan deskriptif per kelompok.")
+
+
+def render_validation_benchmark(df, num_cols, cat_cols):
+    st.markdown("### 🛡️ Validasi, Reproducibility & Benchmark")
+    st.caption("Bagian ini membantu meminimalkan bug analisis dan membuat hasil lebih dapat dipercaya.")
+    checks = []
+    checks.append({"Aspek": "Data aktif", "Status": "OK" if df is not None and not df.empty else "Bermasalah", "Detail": f"{df.shape[0]} baris × {df.shape[1]} kolom" if df is not None else "Tidak ada data"})
+    checks.append({"Aspek": "Variabel numerik", "Status": "OK" if len(num_cols) else "Perlu ditambah", "Detail": f"{len(num_cols)} kolom numerik"})
+    checks.append({"Aspek": "Variabel kategori", "Status": "OK" if len(cat_cols) else "Opsional", "Detail": f"{len(cat_cols)} kolom kategori"})
+    checks.append({"Aspek": "Missing value", "Status": "Perlu cek" if df.isna().sum().sum() > 0 else "OK", "Detail": f"{int(df.isna().sum().sum())} sel kosong"})
+    checks.append({"Aspek": "Output viewer", "Status": "OK" if st.session_state.report_items else "Kosong", "Detail": f"{len(st.session_state.report_items)} output tersimpan"})
+    checks.append({"Aspek": "Syntax log", "Status": "OK" if st.session_state.syntax_log else "Kosong", "Detail": f"{len(st.session_state.syntax_log)} langkah tercatat"})
+    checks.append({"Aspek": "Package statistik", "Status": "OK" if sm is not None else "Terbatas", "Detail": "statsmodels tersedia" if sm is not None else "statsmodels tidak tersedia"})
+    table = pd.DataFrame(checks)
+    st.dataframe(table, use_container_width=True, hide_index=True)
+    if st.button("Simpan checklist validasi", key="v5_validation_save"):
+        add_report("Validation Checklist", table, "Checklist reproduksibilitas dan kesiapan analisis.")
+        st.success("Checklist tersimpan.")
+
+    st.markdown("#### Benchmark manual yang disarankan")
+    st.markdown("""
+- Untuk riset formal, uji beberapa kasus kecil dengan **SPSS/R/JASP** dan bandingkan angka utama: mean, SD, t/F/r, p-value, dan effect size.
+- Simpan versi data, filter, transformasi, dan output di Output Viewer.
+- Jangan hanya mengandalkan p-value; laporkan ukuran efek, CI, asumsi, dan keterbatasan.
+- Jika ada hasil berbeda antar-software, cek: missing value handling, coding kategori, jenis sum of squares, dan opsi equal variance.
+""")
+
+
+def render_advanced_research_analytics(df, num_cols, cat_cols, all_cols):
+    st.subheader("🔬 Analisis Lanjutan v5.0")
+    st.markdown("""
+    Modul ini menambahkan fitur yang sering dibutuhkan agar software lebih mendekati alat statistik komprehensif, tetapi tetap dibuat bertahap agar tidak membingungkan.
+    Gunakan **Smart Assistant** dulu jika belum yakin uji yang tepat.
+    """)
+    st.info("Desain anti-bug: tidak memakai tab bertumpuk, semua input memakai key eksplisit, slider berisiko diganti number input/radio, dan tiap modul diberi fallback.")
+    sub = st.radio(
+        "Pilih fitur lanjutan",
+        ["🧪 Bootstrap & Effect Size", "📐 ANCOVA/MANOVA/RM-ANOVA", "🔗 Mediasi/Moderasi", "📅 Forecasting", "🧩 Missing & Custom Tables", "🛡️ Validasi"],
+        horizontal=True,
+        key="v5_advanced_submenu",
+    )
+    try:
+        if sub == "🧪 Bootstrap & Effect Size":
+            render_bootstrap_effect_size(df, num_cols, cat_cols)
+        elif sub == "📐 ANCOVA/MANOVA/RM-ANOVA":
+            render_glm_family(df, num_cols, cat_cols, all_cols)
+        elif sub == "🔗 Mediasi/Moderasi":
+            render_mediation_moderation(df, num_cols, cat_cols)
+        elif sub == "📅 Forecasting":
+            render_forecasting(df, num_cols, all_cols)
+        elif sub == "🧩 Missing & Custom Tables":
+            render_missing_custom_tables(df, num_cols, cat_cols, all_cols)
+        else:
+            render_validation_benchmark(df, num_cols, cat_cols)
+    except BaseException as exc:
+        if _is_streamlit_control_exception(exc):
+            raise
+        st.error(_analysis_safe_note(sub))
+        st.exception(exc)
+
 # Sidebar input
 st.sidebar.header("📥 Input Data")
 source = st.sidebar.radio("Sumber data", ["Upload File", "Input Manual", "Data Contoh"], index=0)
@@ -3395,9 +4052,9 @@ all_cols = df.columns.tolist()
 
 # Navigasi utama stabil: hanya menu aktif yang dirender
 if ui_mode_is_beginner():
-    section_labels = ['🚀 Mulai Cepat', '🧙 Smart Assistant', '🧰 Kompatibilitas Data', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor', '📚 Panduan']
+    section_labels = ['🚀 Mulai Cepat', '🧙 Smart Assistant', '🧰 Kompatibilitas Data', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🔬 Analisis Lanjutan', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor', '📚 Panduan']
 else:
-    section_labels = ['🚀 Mulai Cepat', '🗂️ Data', '🧰 Kompatibilitas Data', '🧙 Smart Assistant', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor', '📚 Panduan']
+    section_labels = ['🚀 Mulai Cepat', '🗂️ Data', '🧰 Kompatibilitas Data', '🧙 Smart Assistant', '🔁 Transform', '📋 Deskriptif', '🧪 Uji Statistik', '📈 Regresi', '🔬 Analisis Lanjutan', '🧭 Reliabilitas & Faktor', '🎨 Visualisasi', '🧠 Insight Riset', '📤 Output & Ekspor', '📚 Panduan']
 nav_method = getattr(st, "segmented_control", None)
 nav_key_suffix = "beginner" if ui_mode_is_beginner() else "expert"
 if nav_method is not None:
@@ -4433,6 +5090,15 @@ elif active_section == '📈 Regresi':
         if _is_streamlit_control_exception(exc):
             raise
         st.error("Bagian 📈 Regresi mengalami kendala, tetapi aplikasi tetap berjalan.")
+        st.exception(exc)
+
+elif active_section == '🔬 Analisis Lanjutan':
+    try:
+        render_advanced_research_analytics(df, num_cols, cat_cols, all_cols)
+    except BaseException as exc:
+        if _is_streamlit_control_exception(exc):
+            raise
+        st.error("Bagian 🔬 Analisis Lanjutan mengalami kendala, tetapi aplikasi tetap berjalan.")
         st.exception(exc)
 
 elif active_section == '🧭 Reliabilitas & Faktor':
