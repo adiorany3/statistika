@@ -1,4 +1,4 @@
-# Statistik Pro+ v5.0 — Research Analytics Suite
+# Statistik Pro+ v5.1 — Research Analytics Suite
 
 Aplikasi Streamlit untuk analisis statistik yang dirancang sebagai alternatif alat hitung statistika/SPSS untuk riset dasar hingga menengah-lanjutan. Versi ini menambahkan fitur advanced, tetapi UI tetap dibuat sederhana melalui **Mode Pemula/Ahli**, navigasi radio, dan detail yang disimpan dalam expander.
 
@@ -93,3 +93,11 @@ Manage app → Reboot app
 ## Catatan batasan
 
 Aplikasi ini makin mendekati alternatif SPSS, tetapi belum menggantikan penuh modul enterprise SPSS seperti Complex Samples penuh, Exact Tests lengkap, SEM visual setara AMOS, GLMM/GEE lengkap, ARIMA advanced, dan validasi komersial IBM. Untuk riset formal, hasil penting tetap disarankan dibenchmark terhadap SPSS/R/JASP pada beberapa kasus uji.
+
+
+## Update v5.1 — Persistent Footer Edition
+
+- Footer `Developed by Galuh Adi Insani` dibuat lebih permanen dengan fixed bottom bar.
+- Ditambahkan footer cadangan di sidebar.
+- Padding bawah konten ditambah agar bagian akhir halaman tidak tertutup footer.
+- Footer dirender sejak awal script sehingga tetap muncul walau menu tertentu mengalami error lokal.

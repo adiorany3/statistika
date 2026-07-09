@@ -512,3 +512,9 @@ Prinsip penting v5.0:
 - Hindari slider jika nilai minimum dan maksimum bisa sama.
 - Bungkus renderer fitur besar dengan `try/except` lokal.
 - Untuk fitur advanced, lebih baik tampilkan pesan ramah + saran perbaikan daripada crash.
+
+
+## v5.1 Update
+- Footer dibuat lebih permanen menggunakan fixed bottom bar `.statpro-footer-fixed`.
+- Ditambahkan backup footer di sidebar dan spacer bawah agar konten tidak tertutup.
+- Tujuan: credit `Developed by Galuh Adi Insani` tidak hilang saat rerun, scroll panjang, atau navigasi menu.

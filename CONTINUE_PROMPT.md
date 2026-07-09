@@ -1,6 +1,6 @@
 # Prompt untuk melanjutkan proyek di ChatGPT lain
 
-Saya mengunggah ZIP **Statistik Pro+ v5.0 — Research Analytics Suite**. Tolong baca file berikut terlebih dahulu:
+Saya mengunggah ZIP **Statistik Pro+ v5.1 — Research Analytics Suite**. Tolong baca file berikut terlebih dahulu:
 
 1. `CHATGPT_MEMORY.md`
 2. `README.md`

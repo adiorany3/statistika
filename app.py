@@ -244,7 +244,35 @@ st.markdown(
         footer {visibility: hidden;}
         .stDeployButton {display: none;}
         #MainMenu {visibility: hidden;}
-        .block-container {padding-top: 1.3rem; padding-bottom: 2rem;}
+        .block-container {padding-top: 1.3rem; padding-bottom: 5.2rem;}
+        .statpro-footer-fixed {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 999999;
+            padding: 0.62rem 1rem;
+            text-align: center;
+            color: #475569;
+            font-size: 0.86rem;
+            line-height: 1.25rem;
+            background: rgba(255, 255, 255, 0.96);
+            border-top: 1px solid #e5e7eb;
+            box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.06);
+            backdrop-filter: blur(8px);
+        }
+        .statpro-footer-fixed strong {color:#0f172a;}
+        .statpro-footer-spacer {height: 3.2rem;}
+        .statpro-sidebar-footer {
+            margin-top: 1rem;
+            padding: .75rem .65rem;
+            border-radius: .75rem;
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            color: #64748b;
+            font-size: .82rem;
+            text-align: center;
+        }
         .small-note {color: #6b7280; font-size: 0.92rem;}
         .stat-card {
             padding: 1rem; border-radius: 0.9rem; border: 1px solid #e5e7eb;
@@ -268,6 +296,43 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+APP_VERSION = "v5.1"
+FOOTER_TEXT = "Developed by Galuh Adi Insani · Statistik Pro+ v5.1 · Research Analytics Suite"
+
+
+def render_persistent_footer():
+    """Footer tetap terlihat walau halaman panjang, rerun, atau menu aktif berubah."""
+    st.markdown(
+        f"""
+        <div class="statpro-footer-fixed">
+            <strong>Developed by Galuh Adi Insani</strong> · Statistik Pro+ {APP_VERSION} · Research Analytics Suite
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_sidebar_footer():
+    """Footer cadangan di sidebar supaya credit tetap terlihat saat fixed bar tertutup browser/mobile."""
+    try:
+        st.sidebar.markdown(
+            f"""
+            <div class="statpro-sidebar-footer">
+                <strong>Developed by Galuh Adi Insani</strong><br/>
+                Statistik Pro+ {APP_VERSION}<br/>
+                Research Analytics Suite
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
+# Render sejak awal agar footer tetap muncul meskipun menu tertentu mengalami error lokal.
+render_persistent_footer()
 
 
 def init_state():
@@ -5466,5 +5531,6 @@ with st.expander("📖 Catatan Metodologis"):
         """
     )
 
-st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Developed by Galuh Adi Insani · Enhanced as Statistik Pro+ v4.0 · Comprehensive Guided Statistics Suite</p>", unsafe_allow_html=True)
+st.markdown('<div class="statpro-footer-spacer"></div>', unsafe_allow_html=True)
+# Footer fixed sudah dirender di awal; baris ini menjadi spacer agar konten paling bawah tidak tertutup footer.
+render_sidebar_footer()
